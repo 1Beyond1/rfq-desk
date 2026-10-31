@@ -186,6 +186,8 @@ class EvidenceIndex:
   keys={f:self._original_key(row,f) for f in ('rfq','part')}
   known=[entry for entry in self.bindings.values() if all(entry['fields'].get(k)==v for k,v in keys.items())]
   known += [{'binding':{'file':entry['file'],'sha256':entry['sha256'],'record_id':entry['location']},'fields':entry['fields']} for entry in self.records.values() if all(entry['fields'].get(k)==v for k,v in keys.items())]
+  # Equal business keys in several records: which occurrence is meant needs a trusted binding.
+  if len(known)>1:return None
   choices=[]
   for field in ('rfq','part'):
    result=self.verify(field,keys[field],self._claim_sources(row,field))

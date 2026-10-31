@@ -154,3 +154,57 @@ def test_http_contract_uses_mock_transport_only(client):
  assert len(seen)==1 and seen[0]['model']=='test-model'
  assert result['extraction']['model_status']=='not_run' and result['extraction']['requests']==0
  assert result['case']['rows']==[] and result['extraction']['engine']=='http_test_transport'
+
+
+def test_compact_values_are_cleaned_but_stay_literal():
+    from apps.api.semantic import expand_compact_payload,validate_payload
+    from apps.api.materials import material_file
+    text='询价号：RQ-401  PL-19 数量 6 PCS 件状 FN\nPlease quote the following:\n'.encode()
+    m={'files':[material_file('m.txt',text)],'snapshot':'s'}
+    at=lambda value,line=1:{'value':value,'file':'m.txt','location':f'text / line {line}'}
+    payload={'candidates':[{'fields':{'rfq':at('RQ-401'),'part':at('PL-19'),'quantity':at('6 PCS'),'condition':at('件状 FN')}}]}
+    expanded,dropped=expand_compact_payload(payload,m);rows=validate_payload(expanded,m)
+    assert dropped==0 and {k:rows[0]['fields'][k] for k in ('rfq','part','quantity','unit','condition')}=={'rfq':'RQ-401','part':'PL-19','quantity':'6','unit':'PCS','condition':'FN'}
+    for bad in ('Please quote the following:','PL-19'):
+        expanded,dropped=expand_compact_payload({'candidates':[{'fields':{'rfq':at(bad,2 if bad.startswith('Please') else 1),'part':at('PL-19')}}]},m)
+        assert dropped==1 and 'rfq' not in expanded['candidates'][0]['fields']
+
+def test_provider_rate_limit_is_retried_once_then_reported(client,monkeypatch):
+ import httpx
+ monkeypatch.setattr(semantic.asyncio,'sleep',lambda s:_noop())
+ class Busy:
+  status='configured';calls=0
+  async def extract(self,m,b):
+   Busy.calls+=1
+   request=httpx.Request('POST','https://provider.invalid');raise httpx.HTTPStatusError('busy',request=request,response=httpx.Response(429,request=request))
+ main.app.dependency_overrides[semantic.get_adapter]=lambda:Busy()
+ r=client.post('/api/import',files={'file':('mail.txt','Part: X\nQuantity: 2'.encode())}).json()
+ res=client.post(f"/api/cases/{r['id']}/candidates/propose",json={'revision':r['revision'],'values':{'mode':'model','remote_consent':True}})
+ assert res.status_code==422 and '繁忙' in res.json()['detail'] and Busy.calls==2
+
+async def _noop():return None
+
+def _resolve(text,fields):
+    from apps.api.semantic import expand_compact_payload
+    from apps.api.materials import material_file
+    m={'files':[material_file('m.txt',text.encode())],'snapshot':'s'}
+    return expand_compact_payload({'candidates':[{'fields':{k:{'value':v,'file':'m.txt','location':f'text / line {n}'} for k,(v,n) in fields.items()}}]},m),m
+
+def test_a_single_request_number_written_last_is_not_a_boundary():
+    (expanded,_),m=_resolve('Part: LT-1\nQty: 15\nRFQ: R9\n',{'part':('LT-1',1),'quantity':('15',2),'rfq':('R9',3)})
+    assert semantic.validate_payload(expanded,m)[0]['fields']['rfq']=='R9'
+    text='Part: LT-1\nRFQ: R8\nQty: 15\nRFQ: R9\n'
+    (expanded,_),m=_resolve(text,{'part':('LT-1',1),'quantity':('15',3),'rfq':('R9',4)})
+    with pytest.raises(ValueError,match='跨越'):semantic.validate_payload(expanded,m)
+
+def test_quantity_words_and_placeholders():
+    (e,_),_m=_resolve('件号 P1 三个 FN',{'part':('P1',1),'quantity':('三个',1)})
+    assert e['candidates'][0]['fields']['quantity']['value']=='三' and e['candidates'][0]['fields']['unit']['value']=='个'
+    (e,_),_m=_resolve('件号 P1 十二',{'part':('P1',1),'quantity':('十二',1)})
+    assert e['candidates'][0]['fields']['quantity']['value']=='十二' and 'unit' not in e['candidates'][0]['fields']
+    (e,d),_m=_resolve('件号 P1 数量待定',{'part':('P1',1),'quantity':('待定',1)})
+    assert d==1 and 'quantity' not in e['candidates'][0]['fields']
+
+def test_candidate_without_a_cited_part_is_dropped():
+    (e,d),_m=_resolve('询价 R1 详见附件',{'rfq':('R1',1)})
+    assert e=={'candidates':[]} and d==1
