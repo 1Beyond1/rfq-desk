@@ -1,0 +1,23 @@
+Subject: Synthetic forwarded quantity amendment
+From: buyer@example.invalid
+To: desk@example.invalid
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Synthetic development material. Quantity amendment; do not silently choose pr=
+ecedence.
+RFQ: 000401
+Part number: SEM-202
+Quantity: 5
+Unit: EA
+Condition: FN
+Only quantity is revised. Confirm this revision before replacing the prior in=
+quiry.
+---- Forwarded original request ----
+RFQ: 000401
+Part number: SEM-202
+Quantity: 2
+Unit: EA
+Condition: FN
+No valid supplier price is supplied in this message.

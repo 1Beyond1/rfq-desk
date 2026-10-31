@@ -1,0 +1,9 @@
+{
+ "state":"draft-not-tuned-not-frozen",
+ "max_turns":32,"max_seconds":180,"request_timeout":30,"max_tokens":24000,
+ "max_retries":1,"max_tool_calls":60,"max_code_seconds":3,"max_output_bytes":32000,
+ "human_answer_budget":4,"cost_per_million_tokens":null,"max_cost":"1.00",
+ "repeats":3,
+ "tuning_required":"Development runs and prompt/tool/verification improvements must be logged before freezing. Reserved packs remain unreleased. Same model, tools, task events and budgets for compared systems.",
+ "limitations":["Python audit restrictions are cooperative, not a hostile-code filesystem security boundary","Windows Job Object limits worker memory to 256MB and child count to 1; wall time enforced","Only synthetic files copied to fresh scratch dirs; no gold or credentials","No real model run or model tuning yet"]
+}

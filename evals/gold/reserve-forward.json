@@ -1,0 +1,22 @@
+{
+  "task_id": "RESERVE-2",
+  "review_state": "author-defined-needs-independent-review",
+  "checkpoints": [
+    {
+      "stage": 0,
+      "rows": [
+        {
+          "rfq": "000801",
+          "part": "HOLD-PIN",
+          "quantity": "4",
+          "unit": "EA",
+          "condition": "SV",
+          "status": "unpriced",
+          "forbid_total": true,
+          "source_required": true
+        }
+      ],
+      "export_allowed": false
+    }
+  ]
+}

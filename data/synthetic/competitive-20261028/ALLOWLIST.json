@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "classification": "original_synthetic_dev",
+  "files": [
+    {
+      "file": "tune-zh.txt",
+      "sha256": "18d55ac9ba65a82e045c697e2ad970585ab1ce948d4cff5466d64a38370fb9c9"
+    },
+    {
+      "file": "paired-zh.txt",
+      "sha256": "2a6d87fd73e668a6ee979d17a4678458fd3bc2fa7bdaec50590f8e8bab84b468"
+    },
+    {
+      "file": "paired-revision.txt",
+      "sha256": "0c954174864f6d1cc32967ddb405651acc59db52d149594630db2446d5f13c29"
+    },
+    {
+      "file": "paired-ambiguous.txt",
+      "sha256": "473525707dad026947a942c04ab1ae9ccbe3d622579f5d60a732cc5cff6d63fb"
+    },
+    {
+      "file": "tune-v2-zh.txt",
+      "sha256": "38159911f71a46b1322762c44f5cc6b3a4433a20fc2cfefed470e13f6c2c1eb1"
+    },
+    {
+      "file": "tune-v3-zh.txt",
+      "sha256": "cd91016562989924b1f4b21cc292ecabcc20edce498b9d2eda6e2edc475dde7b"
+    }
+  ]
+}

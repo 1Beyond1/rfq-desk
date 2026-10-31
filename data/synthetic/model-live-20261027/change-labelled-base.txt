@@ -1,0 +1,8 @@
+ORIGINAL SYNTHETIC DEV. Explicit labelled revision for supported independent judge.
+RFQ: 009734
+Part: DEV-A734
+Quantity: 2
+Unit: EA
+Condition: FN
+Due date: 2027-02-09
+Requirements: Original requirement

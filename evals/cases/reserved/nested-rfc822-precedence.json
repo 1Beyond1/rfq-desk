@@ -1,0 +1,20 @@
+{
+  "id": "RESERVE-2",
+  "family": "nested-rfc822-precedence",
+  "lineage": "authored-reserve-nested-rfc822-precedence",
+  "split": "reserved",
+  "state": "unexecuted-not-blind-to-author",
+  "title": "Reserved synthetic structure",
+  "as_of": "2026-10-22",
+  "files": [
+    "data/synthetic/tasks/reserved-forward.eml"
+  ],
+  "events": [
+    {
+      "id": "initial",
+      "price_version": 0,
+      "prices": [],
+      "answers": {}
+    }
+  ]
+}

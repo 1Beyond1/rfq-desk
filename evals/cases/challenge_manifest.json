@@ -1,0 +1,39 @@
+{
+  "origin": "authored synthetic tasks, not independently sampled customers",
+  "dev": [
+    {
+      "task": "evals/cases/tasks/lifecycle.json",
+      "family": "authored-tsv-lifecycle",
+      "risk": [
+        "missing price",
+        "approval invalidation",
+        "reclarify",
+        "reapprove"
+      ]
+    },
+    {
+      "task": "evals/cases/tasks/mixed.json",
+      "family": "authored-html-duplicate-conflict",
+      "risk": [
+        "duplicate block",
+        "same part different RFQ",
+        "conflicting quantity"
+      ]
+    }
+  ],
+  "reserved": [
+    {
+      "id": "RESERVE-1",
+      "family": "cross-sheet-unit-amendment",
+      "file_sha256": "56cb794156aae33bcbca600a348b91ab44da635b6487a566f8b873f2c6c7886b",
+      "task": "evals\\cases\\reserved\\cross-sheet-unit-amendment.json"
+    },
+    {
+      "id": "RESERVE-2",
+      "family": "nested-rfc822-precedence",
+      "file_sha256": "aa022e2fb936c29d721f88a08b57462e576a664372ab2e296b8f3bed58b5b1cc",
+      "task": "evals\\cases\\reserved\\nested-rfc822-precedence.json"
+    }
+  ],
+  "reserve_policy": "No parser/product/agent/judge runs on reserved packs before configuration freeze. Author knows generation templates; do not claim blind holdout. Gold for reserved tasks is author-defined in judge-only files and requires independent review before release. Official two groups/derivatives are local development evidence, never heldout because previously inspected."
+}

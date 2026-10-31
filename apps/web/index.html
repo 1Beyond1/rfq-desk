@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>RFQ Desk · 航材询报价工作台</title>
+<link rel="stylesheet" href="style.css?v=20261025t">
+</head>
+<body data-view="work">
+
+<header class="top">
+  <button type="button" class="case-switch" id="caseBtn" aria-controls="drawer" aria-expanded="false"><span class="burger" aria-hidden="true"></span><span>工作单</span></button>
+  <div class="case-id">
+    <span class="eyebrow" id="caseEyebrow">RFQ DESK · 航材询报价</span>
+    <h1 id="title">未打开工作单</h1>
+  </div>
+  <ol class="gates" id="gates" aria-label="报价放行关口"></ol>
+  <div class="top-right">
+    <span class="ver" id="version"></span>
+    <span class="mode" id="mode" title="后端 /api/health 返回的连接状态"><i></i><span id="modeText">检查本地服务…</span></span>
+    <div class="activity">
+      <button type="button" class="top-btn" id="activityBtn" aria-expanded="false">回报<span id="activityCount" class="count" hidden>0</span></button>
+      <div class="pop" id="activityPanel" hidden>
+        <div class="pop-head"><b>后台完成 / 失败回报</b><button type="button" class="text-btn" id="activityClear">清空</button></div>
+        <p class="hint">切换工作单后才返回的结果不会写入当前页面，记录在这里。</p>
+        <div id="taskActivity" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</header>
+<div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+<!-- 工作单抽屉 -->
+<aside class="drawer" id="drawer" aria-label="工作单与导入" hidden>
+  <div class="drawer-head"><b>工作单</b><button type="button" class="top-btn" id="drawerClose" aria-label="关闭">✕</button></div>
+  <label class="btn btn-primary btn-block file-btn"><span>＋ 导入询价原件</span><input id="upload" type="file" accept=".eml,.xlsx,.pdf,.txt,.csv"></label>
+  <p class="hint">EML · XLSX · 文本型 PDF · TXT。原件内容只作数据解析，不执行其中指令。</p>
+  <input id="caseFilter" class="search" type="search" placeholder="筛选标题或尾码" aria-label="筛选工作单">
+  <div id="cases" class="case-list" role="list"></div>
+  <details class="drawer-sec">
+    <summary>合成演示 · 本地研究</summary>
+    <p class="hint">均为明确标记的合成或本机素材，不代表真实业务反馈。</p>
+    <button type="button" class="list-btn" id="demo">合成询价：重复 / 冲突 / 缺价</button>
+    <button type="button" class="list-btn" id="mailRevision">合成邮件：中文转发修订</button>
+    <button type="button" class="list-btn" id="mailMixed">合成邮件：中文混排</button>
+    <button type="button" class="list-btn" id="lifecycle">合成报价变更演练</button>
+    <button type="button" class="list-btn" id="proseDemo">合成正文审阅</button>
+    <button type="button" class="list-btn" id="revisionDemo">合成转发修订审阅</button>
+    <details><summary>本地官方素材（仅本机解析）</summary><div id="official"></div></details>
+  </details>
+  <section class="drawer-sec" aria-label="本浏览器裁定草稿">
+    <div class="sec-row"><b>本浏览器草稿</b><label class="switch"><input id="localDraftEnabled" type="checkbox">暂存</label></div>
+    <p id="localDraftStatus" class="hint" role="status"></p>
+    <div class="btn-row">
+      <button type="button" class="btn btn-sm" id="openLocalDrafts">查看可恢复</button>
+      <button type="button" class="btn btn-sm" id="retryLocalDrafts">重试暂存</button>
+      <button type="button" class="btn btn-sm btn-ghost" id="clearLocalDrafts">清除</button>
+    </div>
+    <p class="hint">行编辑与理由暂存≤7天 / 50行 / 约256KB；不含原件或密钥。表单填写另在当前标签页暂存≤12小时，刷新可保留，关闭标签页失效；关闭暂存会清除两种暂存。旧版填写只供对照，不自动保存或批准。</p>
+  </section>
+</aside>
+<div class="scrim" id="scrim" hidden></div>
+
+<!-- 首页 -->
+<main id="landing" class="landing">
+  <section class="land-hero">
+    <span class="eyebrow">MATERIALS · QUOTATION OPERATIONS</span>
+    <h2>一张询价，从邮件到放行报价。</h2>
+    <p>左侧是挡住这单报价的事，中间就地处理，右侧始终对照原件。没有唯一有效依据的行不会被批准，未答清的问题不会被当成已解决。</p>
+    <div class="btn-row">
+      <label class="btn btn-primary file-btn"><span>导入询价原件</span><input id="uploadLanding" type="file" accept=".eml,.xlsx,.pdf,.txt,.csv"></label>
+      <button type="button" class="btn" id="start">打开合成演示</button>
+      <button type="button" class="btn" id="mailDemo">试试邮件正文提取</button>
+    </div>
+  </section>
+  <section class="land-cases">
+    <div class="sec-row"><h3>继续处理</h3><input id="landingFilter" class="search" type="search" placeholder="筛选" aria-label="筛选工作单"></div>
+    <div id="landingCases" class="case-grid"></div>
+  </section>
+</main>
+
+<!-- 工作台：队列 / 处理 / 原件 -->
+<div id="desk" class="desk" hidden>
+  <nav class="queue" id="queuePane" aria-label="待办队列">
+    <div id="nextCard" class="next-card" aria-live="polite"></div>
+    <div class="seg" role="tablist">
+      <button type="button" data-queue="todo" aria-selected="true">待办</button>
+      <button type="button" data-queue="rows" aria-selected="false">全部询价行</button>
+    </div>
+    <div id="queue" class="queue-body"></div>
+    <div class="queue-tools">
+      <button type="button" class="tool" data-focus="prices">价格依据总表</button>
+      <button type="button" class="tool" data-focus="materials">原件与修订候选</button>
+      <button type="button" class="tool" data-focus="clarifications">澄清总览</button>
+      <button type="button" class="tool" data-focus="log">版本与决策记录</button>
+    </div>
+  </nav>
+  <main class="work" id="work" aria-live="polite"></main>
+  <aside class="source" id="sourcePane" aria-label="原件对照">
+    <div class="src-head">
+      <div><span class="eyebrow">原件对照</span><b id="srcTitle">原件</b></div>
+      <button type="button" class="top-btn src-close" id="srcClose" aria-label="收起原件">✕</button>
+    </div>
+    <div class="src-files" id="srcFiles" role="tablist"></div>
+    <div class="src-body" id="srcBody"></div>
+  </aside>
+</div>
+
+<nav class="mobile-nav" id="mobileNav" aria-label="视图切换" hidden>
+  <button type="button" data-view="queue">待办<span id="mqCount"></span></button>
+  <button type="button" data-view="work">处理</button>
+  <button type="button" data-view="source">原件</button>
+</nav>
+<button type="button" class="src-toggle" id="srcToggle" hidden>原件</button>
+
+<!-- 价目原件审阅 -->
+<dialog id="priceImport" class="wide">
+  <div class="dlg-head"><h2>审阅价目原件</h2><button type="button" class="top-btn" id="cancelImportX" aria-label="关闭">✕</button></div>
+  <p id="importSummary" class="note"></p>
+  <div class="table-wrap"><table class="grid"><thead><tr><th>原件行</th><th>件号 / 单位 / 件状</th><th>金额 / 币种</th><th>有效期 / 来源</th><th>审阅结果</th></tr></thead><tbody id="importRows"></tbody></table></div>
+  <div class="fields two">
+    <label>生效方式<select id="importMode"><option value="append">追加到现有价目（有冲突则拒绝）</option><option value="replace">替换全部现有价目</option></select></label>
+    <label>核对人<input id="importActor"></label>
+    <label class="span2">审阅依据 / 替换理由<input id="importReason"></label>
+  </div>
+  <label class="check"><input type="checkbox" id="importReplaceConfirm">确认替换全部现有价目，相关批准将重新核验（仅替换时必选）</label>
+  <p id="importError" class="msg error" role="alert"></p>
+  <div class="btn-row">
+    <button type="button" class="btn btn-primary" id="acceptPrices">确认审阅并保存价目</button>
+    <button type="button" class="btn btn-ghost" id="cancelImport">取消，不改变价目</button>
+  </div>
+</dialog>
+
+<!-- 澄清草稿预览 -->
+<dialog id="preview" class="wide">
+  <div class="dlg-head"><h2>澄清草稿预览</h2><button type="button" class="top-btn" id="closePreview" aria-label="关闭">✕</button></div>
+  <p class="hint">仅预览，没有发送邮件，问题状态不变。</p>
+  <pre id="previewText" class="pre"></pre>
+</dialog>
+
+<!-- 本地草稿恢复 -->
+<dialog id="localDraftDialog" class="wide">
+  <div class="dlg-head"><h2>核对本地未保存裁定</h2><button type="button" class="top-btn" id="closeLocalDraftsX" aria-label="关闭">✕</button></div>
+  <p class="hint">恢复只放入对应行的编辑区，仍需核对、填写理由并明确保存；旧版本不自动覆盖。</p>
+  <div class="recovery">
+    <div id="localDraftList" class="recovery-list"></div>
+    <section id="localDraftCompare"></section>
+  </div>
+  <p id="localDraftError" class="msg error" role="alert"></p>
+  <div class="btn-row">
+    <button type="button" class="btn btn-primary" id="restoreLocalDraft" disabled>恢复到编辑区</button>
+    <button type="button" class="btn" id="deleteLocalDraft" disabled>清除此份暂存</button>
+    <button type="button" class="btn btn-ghost" id="closeLocalDrafts">关闭</button>
+  </div>
+</dialog>
+
+<script src="draft-store.js?v=20261025t"></script>
+<script src="interaction.js?v=20261025t"></script>
+<script src="config.js?v=20261026q"></script>
+<script src="ui-state.js?v=20261026q"></script>
+<script src="app.js?v=20261026q"></script>
+<script src="work.js?v=20261026q"></script>
+</body>
+</html>

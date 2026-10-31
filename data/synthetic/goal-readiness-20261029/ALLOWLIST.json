@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "classification": "original_synthetic_dev",
+  "files": [
+    {
+      "file": "tune.txt",
+      "sha256": "c50273eb1d7ed638e8ff584502f9e709d4269acb326e1b9c32bf2d8a2286a9cd"
+    },
+    {
+      "file": "dual.txt",
+      "sha256": "54a020c2167dd8ef53bf3c00219afcf41ff2981aac44e89a9881fe8488b59d49"
+    },
+    {
+      "file": "revision.txt",
+      "sha256": "08e732f3de0c5372d93d65aa3ec7be374edd3628c5358681002e563567b6ca4c"
+    },
+    {
+      "file": "tune-update.txt",
+      "sha256": "712c453666d090a40d0078baec31e8fd514204f3bc8ec008cf6b4b1da135dc43"
+    },
+    {
+      "file": "sparse-a.txt",
+      "sha256": "d68709de98da2c0422095d4da3f2e7f3da7217fca1f2b35ad938b87dc63e4e31"
+    },
+    {
+      "file": "sparse-b.txt",
+      "sha256": "2653322e06269fb5b308cb005edf0d6038f4ffa933192f1435f5cac6e3210494"
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "task_id": "DEV-EVENT-01",
+  "checkpoints": [
+    {
+      "stage": 0,
+      "rows": [
+        {
+          "rfq": "000201",
+          "part": "EVT-001",
+          "quantity": "3",
+          "unit": "EA",
+          "condition": "FN",
+          "status": "ready",
+          "total": "30.00",
+          "forbid_total": false,
+          "source_required": true,
+          "approval": {
+            "price_version": 1,
+            "answer_id": "SYN-AUTH-1"
+          }
+        },
+        {
+          "rfq": "000202",
+          "part": "EVT-001",
+          "quantity": "2",
+          "unit": "EA",
+          "condition": "FN",
+          "status": "ready",
+          "total": "20.00",
+          "forbid_total": false,
+          "source_required": true,
+          "approval": {
+            "price_version": 1,
+            "answer_id": "SYN-AUTH-1"
+          }
+        }
+      ],
+      "export_allowed": true,
+      "approval_snapshot": "47136c64382250e2e1d5f31c8e5cb77939c0b733cfcccdefabf317089627a964"
+    },
+    {
+      "stage": 1,
+      "rows": [
+        {
+          "rfq": "000201",
+          "part": "EVT-001",
+          "quantity": "3",
+          "unit": "EA",
+          "condition": "FN",
+          "status": "unpriced",
+          "total": null,
+          "forbid_total": true,
+          "source_required": true,
+          "approval": {}
+        },
+        {
+          "rfq": "000202",
+          "part": "EVT-001",
+          "quantity": "2",
+          "unit": "EA",
+          "condition": "FN",
+          "status": "unpriced",
+          "total": null,
+          "forbid_total": true,
+          "source_required": true,
+          "approval": {}
+        }
+      ],
+      "export_allowed": false,
+      "approval_snapshot": null
+    },
+    {
+      "stage": 2,
+      "rows": [
+        {
+          "rfq": "000201",
+          "part": "EVT-001",
+          "quantity": "3",
+          "unit": "EA",
+          "condition": "FN",
+          "status": "ready",
+          "total": "37.50",
+          "forbid_total": false,
+          "source_required": true,
+          "approval": {
+            "price_version": 3,
+            "answer_id": "SYN-AUTH-3"
+          }
+        },
+        {
+          "rfq": "000202",
+          "part": "EVT-001",
+          "quantity": "2",
+          "unit": "EA",
+          "condition": "FN",
+          "status": "ready",
+          "total": "25.00",
+          "forbid_total": false,
+          "source_required": true,
+          "approval": {
+            "price_version": 3,
+            "answer_id": "SYN-AUTH-3"
+          }
+        }
+      ],
+      "export_allowed": true,
+      "approval_snapshot": "ecaf257efdf9b06488a95dc46b984658bf2a6e9bc9996146428ad24a13c49991"
+    }
+  ]
+}

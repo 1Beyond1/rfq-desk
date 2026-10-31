@@ -1,0 +1,26 @@
+[
+  {
+    "part": "SYN-001",
+    "unit": "EA",
+    "condition": "FN",
+    "currency": "USD",
+    "amount": "12.35",
+    "valid_from": "2026-01-01",
+    "valid_until": "2027-12-31",
+    "lead_time": "演示 7 天",
+    "source": "SYN-CATALOG-01 / 人工生成合成价表",
+    "kind": "synthetic"
+  },
+  {
+    "part": "SYN-002",
+    "unit": "EA",
+    "condition": "FN",
+    "currency": "USD",
+    "amount": "48.20",
+    "valid_from": "2026-01-01",
+    "valid_until": "2027-12-31",
+    "lead_time": "演示 7 天",
+    "source": "SYN-CATALOG-01 / 人工生成合成价表",
+    "kind": "synthetic"
+  }
+]

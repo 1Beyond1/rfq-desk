@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "classification": "original_synthetic_dev",
+  "review": "Locally reviewed original text; no official/customer/answer/holdout data. Only these exact bytes allowed.",
+  "files": [
+    {
+      "file": "ambiguous.txt",
+      "sha256": "c21977ac6444c15b533118ac91d25ec1f508004383904f9ffb32dfd0266dbe44"
+    },
+    {
+      "file": "change-base.txt",
+      "sha256": "67d9aa7c563bf0859bb683ecb3ad16a47e7ed3360dba98e4757201dbd4277f4b"
+    },
+    {
+      "file": "change-labelled-base.txt",
+      "sha256": "ef08dc97a58bcb492790788b544d6d0734cf3e6733c2a75d1194460ec1fd3a71"
+    },
+    {
+      "file": "change-update.txt",
+      "sha256": "3a0acf7d923bb446bfd00a1983f6a124f7aec49431ac434ed6a68e209fee4ce3"
+    },
+    {
+      "file": "normal.txt",
+      "sha256": "2b5391fba165f7d361a8e9a77d93333e6cc383b9b3fdd06b2d2079f7c67fb3ae"
+    },
+    {
+      "file": "normal-update.txt",
+      "sha256": "1e2afbffbe6ed631456d9a8a2b9cdb9552e84f26891625bce0cfff7503f20831"
+    }
+  ]
+}

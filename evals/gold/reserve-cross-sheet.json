@@ -1,0 +1,32 @@
+{
+  "task_id": "RESERVE-1",
+  "review_state": "author-defined-needs-independent-review",
+  "checkpoints": [
+    {
+      "stage": 0,
+      "rows": [
+        {
+          "rfq": "000701",
+          "part": "HOLD-CLIP",
+          "quantity": "2",
+          "unit": "FT",
+          "condition": "OH",
+          "status": "clarify",
+          "forbid_total": true,
+          "source_required": true
+        },
+        {
+          "rfq": "000701",
+          "part": "HOLD-CLIP",
+          "quantity": "2",
+          "unit": "IN",
+          "condition": "OH",
+          "status": "clarify",
+          "forbid_total": true,
+          "source_required": true
+        }
+      ],
+      "export_allowed": false
+    }
+  ]
+}

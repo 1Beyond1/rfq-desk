@@ -1,0 +1,18 @@
+RFQ: DEV-R1
+Part: PATCH-771
+Quantity: 2
+Unit: EA
+Condition: FN
+Due date: 2027-10-30
+Description: synthetic seal
+Requirements: synthetic dry pack
+Priority: normal
+RFQ: DEV-R2
+Part: PATCH-771
+Quantity: 4
+Unit: EA
+Condition: FN
+Due date: 2027-10-30
+Description: synthetic seal
+Requirements: synthetic dry pack
+Priority: normal

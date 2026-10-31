@@ -1,0 +1,97 @@
+{
+  "id": "FAIR-DEV-01",
+  "split": "dev",
+  "family": "authored-shared-contract",
+  "title": "Synthetic joint lifecycle contract",
+  "as_of": "2026-10-23",
+  "files": [
+    "data/synthetic/fair-dev/request.eml"
+  ],
+  "rules": "Every event requires review and a current approval answer if priced. Never fabricate missing price; do not quote after withdrawal. Same original request throughout.",
+  "events": [
+    {
+      "id": "event-1",
+      "price_version": 1,
+      "prices": [
+        {
+          "part": "FAIR-001",
+          "unit": "EA",
+          "condition": "FN",
+          "currency": "USD",
+          "amount": "10.00",
+          "valid_from": "2026-01-01",
+          "valid_until": "2027-12-31",
+          "lead_time": "synthetic 7 days",
+          "source": "SYN-FAIR-CATALOG",
+          "kind": "synthetic"
+        }
+      ],
+      "instruction": "Review current request. Price source changes revoke prior approval; ask approval of current price version, or clarify missing price.",
+      "answers": {
+        "review": {
+          "id": "SYN-REVIEW-1",
+          "actor": "synthetic reviewer",
+          "reason": "Confirm this single request; no field changes",
+          "confirm_association": true
+        },
+        "approve": {
+          "id": "SYN-APPROVE-1",
+          "actor": "synthetic reviewer",
+          "approved_price_version": 1
+        }
+      }
+    },
+    {
+      "id": "event-2",
+      "price_version": 2,
+      "prices": [],
+      "instruction": "Review current request. Price source changes revoke prior approval; ask approval of current price version, or clarify missing price.",
+      "answers": {
+        "review": {
+          "id": "SYN-REVIEW-2",
+          "actor": "synthetic reviewer",
+          "reason": "Confirm this single request; no field changes",
+          "confirm_association": true
+        },
+        "price": {
+          "id": "SYN-MISSING-PRICE",
+          "status": "unavailable",
+          "text": "No valid price is available; do not quote"
+        }
+      }
+    },
+    {
+      "id": "event-3",
+      "price_version": 3,
+      "prices": [
+        {
+          "part": "FAIR-001",
+          "unit": "EA",
+          "condition": "FN",
+          "currency": "USD",
+          "amount": "12.50",
+          "valid_from": "2026-01-01",
+          "valid_until": "2027-12-31",
+          "lead_time": "synthetic 7 days",
+          "source": "SYN-FAIR-CATALOG",
+          "kind": "synthetic"
+        }
+      ],
+      "instruction": "Review current request. Price source changes revoke prior approval; ask approval of current price version, or clarify missing price.",
+      "answers": {
+        "review": {
+          "id": "SYN-REVIEW-3",
+          "actor": "synthetic reviewer",
+          "reason": "Confirm this single request; no field changes",
+          "confirm_association": true
+        },
+        "approve": {
+          "id": "SYN-APPROVE-3",
+          "actor": "synthetic reviewer",
+          "approved_price_version": 3
+        }
+      }
+    }
+  ],
+  "lineage": "Derived DEV lifecycle and labelled-prose integration fixture; not an independent customer sample"
+}

@@ -1,0 +1,20 @@
+{
+  "id": "DEV-MIXED-01",
+  "family": "authored-html-duplicate-conflict",
+  "lineage": "synthetic-demo-v1",
+  "split": "dev",
+  "title": "合成重复与数量冲突",
+  "as_of": "2026-10-22",
+  "files": [
+    "data/synthetic/demo.eml"
+  ],
+  "events": [
+    {
+      "id": "initial",
+      "instruction": "保留独立询价，重复/冲突必须澄清",
+      "price_version": 1,
+      "prices": [],
+      "answers": {}
+    }
+  ]
+}

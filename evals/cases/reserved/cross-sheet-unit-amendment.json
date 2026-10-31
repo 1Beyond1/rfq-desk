@@ -1,0 +1,20 @@
+{
+  "id": "RESERVE-1",
+  "family": "cross-sheet-unit-amendment",
+  "lineage": "authored-reserve-cross-sheet-unit-amendment",
+  "split": "reserved",
+  "state": "unexecuted-not-blind-to-author",
+  "title": "Reserved synthetic structure",
+  "as_of": "2026-10-22",
+  "files": [
+    "data/synthetic/tasks/reserved-multisheet.xlsx"
+  ],
+  "events": [
+    {
+      "id": "initial",
+      "price_version": 0,
+      "prices": [],
+      "answers": {}
+    }
+  ]
+}

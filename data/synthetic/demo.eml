@@ -1,0 +1,32 @@
+Subject: Synthetic RFQ training sample
+From: buyer@example.invalid
+To: desk@example.invalid
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============3999956546008338453=="
+
+--===============3999956546008338453==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Synthetic example only. Refer to the HTML table.
+
+--===============3999956546008338453==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<h1>=E5=90=88=E6=88=90=E8=AF=A2=E4=BB=B7 =C2=B7 =E4=BB=85=E4=BE=9B=E6=BC=94=
+=E7=A4=BA</h1><table><tr><th>RFQ No.</th><th>Part Number</th><th>Description<=
+/th><th>Quantity</th><th>Unit</th><th>Condition</th></tr><tr><td>000101</td><=
+td>SYN-001</td><td>WASHER / =E5=9E=AB=E7=89=87</td><td>8</td><td>EA</td><td>F=
+N</td></tr><tr><td>000102</td><td>SYN-001</td><td>WASHER / =E5=9E=AB=E7=89=87=
+</td><td>8</td><td>EA</td><td>FN</td></tr><tr><td>000102</td><td>SYN-001</td>=
+<td>WASHER / =E5=9E=AB=E7=89=87</td><td>8</td><td>EA</td><td>FN</td></tr><tr>=
+<td>000103</td><td>SYN-002</td><td>SEAL / =E5=AF=86=E5=B0=81=E4=BB=B6</td><td=
+>2</td><td>EA</td><td>FN</td></tr><tr><td>000103</td><td>SYN-002</td><td>SEAL=
+ / =E5=AF=86=E5=B0=81=E4=BB=B6</td><td>3</td><td>EA</td><td>FN</td></tr><tr><=
+td>000104</td><td>SYN-003</td><td>CLAMP / =E5=8D=A1=E7=AE=8D</td><td>5</td><t=
+d>EA</td><td>FN</td></tr></table>
+
+--===============3999956546008338453==--

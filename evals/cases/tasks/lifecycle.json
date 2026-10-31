@@ -1,0 +1,78 @@
+{
+  "id": "DEV-EVENT-01",
+  "family": "authored-tsv-lifecycle",
+  "lineage": "synthetic-original-lifecycle-v1",
+  "split": "dev",
+  "title": "合成报价撤回及重新批准事件",
+  "as_of": "2026-10-22",
+  "files": [
+    "data/synthetic/tasks/lifecycle.eml"
+  ],
+  "events": [
+    {
+      "id": "initial",
+      "instruction": "核验并询问当前快照批准",
+      "price_version": 1,
+      "prices": [
+        {
+          "part": "EVT-001",
+          "unit": "EA",
+          "condition": "FN",
+          "currency": "USD",
+          "amount": "10.00",
+          "valid_from": "2026-01-01",
+          "valid_until": "2027-12-31",
+          "lead_time": "synthetic 7 days",
+          "source": "SYN-EVENT-CATALOG",
+          "kind": "synthetic"
+        }
+      ],
+      "answers": {
+        "approve": {
+          "id": "SYN-AUTH-1",
+          "actor": "synthetic reviewer",
+          "approved_price_version": 1
+        }
+      }
+    },
+    {
+      "id": "price_change_missing",
+      "instruction": "供应商撤回价格；旧批准不可导出，澄清缺价",
+      "price_version": 2,
+      "prices": [],
+      "answers": {
+        "price": {
+          "id": "SYN-CLAR-2",
+          "status": "unavailable",
+          "text": "尚无新报价，不得猜测"
+        }
+      }
+    },
+    {
+      "id": "new_price",
+      "instruction": "提供新价格，需重新批准",
+      "price_version": 3,
+      "prices": [
+        {
+          "part": "EVT-001",
+          "unit": "EA",
+          "condition": "FN",
+          "currency": "USD",
+          "amount": "12.50",
+          "valid_from": "2026-01-01",
+          "valid_until": "2027-12-31",
+          "lead_time": "synthetic 7 days",
+          "source": "SYN-EVENT-CATALOG",
+          "kind": "synthetic"
+        }
+      ],
+      "answers": {
+        "approve": {
+          "id": "SYN-AUTH-3",
+          "actor": "synthetic reviewer",
+          "approved_price_version": 3
+        }
+      }
+    }
+  ]
+}
