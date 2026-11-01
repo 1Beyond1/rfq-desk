@@ -151,7 +151,7 @@ const priceKeyList=['part','unit','condition','currency','amount','lead_time','v
 function readPrice(prefix){
   const p=Object.fromEntries(priceKeyList.map(k=>[k,(W().querySelector(`[data-keep="${prefix}${k}"]`)?.value||'').trim()]));
   const empty=priceKeyList.filter(k=>!p[k]);
-  if(empty.length)throw Error('请填齐全部价格依据字段（缺 '+empty.length+' 项）');
+  if(empty.length)throw Error('还差：'+empty.map(k=>({part:'件号',unit:'单位',condition:'件状',currency:'币种',amount:'单价',lead_time:'交期',valid_from:'生效日期',valid_until:'失效日期',source:'来源 / 授权依据',kind:'来源类型'}[k])).join('、'));
   if(!/^\d+(\.\d+)?$/.test(p.amount))throw Error('单价须为非负十进制数字，例如 13 或 12.35');
   if(p.valid_until<p.valid_from)throw Error('失效日期早于生效日期');
   return p;
@@ -173,10 +173,11 @@ function viewPrice(){
       <p class="msg" id="priceMsg"></p>
       <div class="btn-row"><button type="button" class="btn btn-primary" id="savePrice" ${!keyOk||catalogDraft?'disabled':''}>保存为价表新版本</button>
         <label class="btn file-btn"><span>或导入 CSV / XLSX 价目原件</span><input type="file" accept=".csv,.xlsx" id="priceFileInline"></label>
-        <button type="button" class="btn btn-ghost" data-goto="prices|">打开价格依据总表</button></div>
+        <button type="button" class="btn btn-ghost" id="loadPricesInline" ${catalogDraft?'disabled':''}>加载合成演示价表</button><button type="button" class="btn btn-ghost" data-goto="prices|">打开价格依据总表</button></div>
     </section>
   </div>`;
   $('priceFileInline').onchange=e=>run(()=>startPriceImport(e.target));
+  $('loadPricesInline').onclick=()=>run(()=>change('demo-prices',{},(after,before)=>RfqUiState.priceNotice(after,before)+' 本次为明确合成价表，缺价行仍需人工核价。'));
   $('savePrice').onclick=()=>run(async()=>{
     const p=readPrice('p:'),snap=snapshotKept(W()),done=busyButton($('savePrice'),'保存中…');
     try{if(await change('prices',{prices:[...current.prices,p]},RfqUiState.priceNotice))releaseKept(snap)}finally{done()}
@@ -278,7 +279,7 @@ async function proposeCandidates(mode){
   const ctx=interaction.capture(current),task=interaction.begin(ctx,'propose');
   try{const response=await request(`/cases/${ctx.caseId}/candidates/propose`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:ctx.revision,values:{mode,remote_consent:consent}})});
     const x=response.extraction,found=x.count||0,stated={unsupported:'没有在这份原件里找到带件号的询价行。',blocked_material:'这份原件不能发送给模型。',not_configured:'模型服务未配置。',disabled:'模型提取未启用。'};
-    applyResponse(response.case,ctx,`${found?`提取到 ${found} 条候选。`:stated[x.status]||'没有提取到候选。'}${x.rejected_candidates?`另有 ${x.rejected_candidates} 条因缺件号或不合规被忽略。`:''}${x.dropped_fields?`${x.dropped_fields} 个字段没有可靠原文，已丢弃。`:''}${found?'正式行尚未改变，需逐条审阅。':'正式行没有变化。'}`)}
+    applyResponse(response.case,ctx,`${found?`提取到 ${found} 条候选。`:stated[x.status]||'没有提取到候选。'}${x.rejected_candidates?`另有 ${x.rejected_candidates} 条因缺件号或不合规被忽略。`:''}${x.dropped_fields?`${x.dropped_fields} 个字段没有可靠原文，已丢弃。`:''}${found?'正式行尚未改变，需逐条审阅。':'正式行没有变化。'}`);const batch=(current?.candidate_batches||[]).at(-1);if(found&&current?.id===ctx.caseId&&batch?.candidates?.[0])setFocus('cand',batch.id+':'+batch.candidates[0].id)}
   catch(e){if(interaction.active(ctx,current))throw e;activity(ctx,'候选提取失败：'+e.message,true)}finally{interaction.finish(task);if(mode==='model')await refreshModelState()}
 }
 function step(n,state,title,body){return `<li class="step ${state}"><span class="step-n">${state==='done'?'✓':n}</span><div class="step-body"><h3>${title}</h3>${body}</div></li>`}
@@ -365,16 +366,16 @@ function viewCandidate(){
   const fresh=b.expected_revision===current.revision&&c.status==='pending';
   const mode=kept.get(keepKey('mode'))||'full',target=kept.get(keepKey('target'))??'',base=current.rows.find(r=>r.id===target),partial=mode==='partial';
   const fields=Object.entries(fieldNames).map(([f,l])=>{const op=kept.get(keepKey('op:'+f))||'inherit',enabled=!partial||op==='update',src=c.field_sources[f];return `<div class="cf"><label>${l}${partial?`<select data-keep="op:${f}" data-op="${f}" ${['rfq','part'].includes(f)?'disabled':''}><option value="inherit">继承基础值</option>${f in c.fields&&!['rfq','part'].includes(f)?'<option value="update">更新本次值</option>':''}${!['rfq','part'].includes(f)?'<option value="clear">明确清空</option>':''}</select>`:''}<input data-keep="f:${f}" data-field="${f}" value="${esc(c.fields[f]||'')}" class="mono" ${enabled?'':'disabled'}></label>${partial?`<small>基础「<span class="mono">${esc(base?.[f]??'请选择目标行')}</span>」</small>`:''}<small>${src?`<button type="button" class="src-link" data-srcfield="${f}">${esc(src.file)} · ${esc(src.location)}</button>「<span class="mono">${esc(src.quote)}</span>」`:'没有本次引用'}</small></div>`}).join('');
-  W().innerHTML=head('修订候选 · '+esc(engineName(b.engine)),label({rfq:c.fields.rfq,part:c.fields.part}),{mono:true,sub:`候选不是正式询价，原文片段只证明文字存在，业务归属和修订关系须人工核对。`,chip:`<span class="chip ${fresh?'tone-price':'tone-off'}">${fresh?'待审阅':c.status!=='pending'?c.status:'旧批次，须重新生成'}</span>`})+
+  W().innerHTML=head('修订候选 · '+esc(engineName(b.engine)),label({rfq:c.fields.rfq,part:c.fields.part}),{mono:true,sub:`这是模型提出的候选，还不是正式询价。请核对每个值，以及它属于哪一张询价。`,chip:`<span class="chip ${fresh?'tone-price':'tone-off'}">${fresh?'待审阅':c.status!=='pending'?({accepted:'已接纳',rejected:'已拒绝'}[c.status]||c.status):'旧批次，须重新生成'}</span>`})+
   `<div class="w-body">${fresh?'':'<p class="note bad">此候选不能再接纳：已处理或工作版本已变化，请重新生成候选。</p>'}
   <fieldset class="card" ${fresh?'':'disabled'}>
-    <div class="fields two"><label>操作<select data-keep="mode" id="candMode"><option value="full">整行新建 / 替换（原语义）</option><option value="partial">局部修订（逐字段选择）</option></select></label><label>目标正式行<select data-keep="target" id="candTarget"><option value="">新增正式行</option>${current.rows.map(r=>`<option value="${r.id}">${esc(r.rfq)} / ${esc(r.part)} / 数量 ${esc(r.quantity)} / 行版本 ${r.revision}</option>`).join('')}</select></label></div>
-    <p class="hint">${partial?'未选字段继承所选基础行及其原出处。更新须有本次引用；清空须单独理由。询价号与件号必须一致。':'整行替换保留原语义：候选未提供的字段默认为空。'}</p>
+    <div class="fields two"><label>操作<select data-keep="mode" id="candMode"><option value="full">新建一行或整行替换</option><option value="partial">局部修订（逐字段选择）</option></select></label><label>目标正式行<select data-keep="target" id="candTarget"><option value="">新增正式行</option>${current.rows.map(r=>`<option value="${r.id}">${esc(r.rfq)} / ${esc(r.part)} / 数量 ${esc(r.quantity)} / 行版本 ${r.revision}</option>`).join('')}</select></label></div>
+    <p class="hint">${partial?'未选字段继承所选基础行及其原出处。更新须有本次引用；清空须单独理由。询价号与件号必须一致。':'整行替换时，候选里没有的字段会留空。'}</p>
     <div class="cfields">${fields}</div>
     <div class="fields two"><label>明确清空理由（仅清空时必填）<input data-keep="clear"></label><label>核对人<input data-keep="actor"></label><label class="span2">裁定理由<textarea data-keep="reason" rows="2"></textarea></label></div>
     <div class="checks"><label><input type="checkbox" data-keep="assoc">已核对字段属于同一询价，并确认本次采用的修订</label><label><input type="checkbox" data-keep="reassign">若替换不同询价/件号，确认重新归属</label><label><input type="checkbox" data-keep="cunit">已确认单位原值（未知缩写不释义）</label><label><input type="checkbox" data-keep="ccond">已确认件状原值（未知缩写不释义）</label></div>
     <p class="msg error" id="candError"></p>
-    <div class="btn-row"><button type="button" class="btn btn-primary" id="candAccept">显式接纳为正式行</button><button type="button" class="btn" id="candAcceptBatch">接纳本批所有无争议候选</button><button type="button" class="btn" id="candReject">拒绝候选</button></div>
+    <div class="btn-row"><button type="button" class="btn btn-primary" id="candAccept">接纳为正式行</button><button type="button" class="btn" id="candAcceptBatch">接纳本批所有无争议候选</button><button type="button" class="btn" id="candReject">拒绝候选</button></div>
   </fieldset></div>`;
   const rerender=()=>renderWork();$('candMode').onchange=$('candTarget').onchange=rerender;qsa('[data-op]').forEach(s=>s.onchange=rerender);
   const val=k=>W().querySelector(`[data-keep="${k}"]`),submit=action=>run(async()=>{
@@ -382,13 +383,13 @@ function viewCandidate(){
     const values={action,mode:m,fields:Object.fromEntries(qsa('[data-field]').filter(e=>!e.disabled).map(e=>[e.dataset.field,e.value])),actor:val('actor').value,reason:val('reason').value,target_row_id:tgt,confirm_association:val('assoc').checked,confirm_reassignment:val('reassign').checked,confirmed_fields:[val('cunit').checked?'unit':null,val('ccond').checked?'condition':null].filter(Boolean)};
     if(m==='partial')Object.assign(values,{base_revision:current.revision,base_row_revision:baseRow?.revision,update_fields:ops.filter(e=>e.value==='update').map(e=>e.dataset.op),clear_fields:ops.filter(e=>e.value==='clear').map(e=>e.dataset.op),clear_reason:val('clear').value});
     $('candError').textContent='';
-    try{if(await change(`candidates/${bid}/${cid}/review`,values,action==='accept'?'已显式接纳；请核查受影响批准、继承出处与价源。':'候选已拒绝，正式行未改变。'))releaseKept(snap)}
+    try{if(await change(`candidates/${bid}/${cid}/review`,values,action==='accept'?'已显式接纳；请核查受影响批准、继承出处与价源。':'候选已拒绝，正式行未改变。')){releaseKept(snap);const n=firstFocus();if(n)setFocus(n.type,n.id)}}
     catch(e){if($('candError'))$('candError').textContent=e.message;else throw e}
   });
   $('candAccept').onclick=()=>submit('accept');
   $('candAcceptBatch').onclick=()=>run(async()=>{
     const snap=snapshotKept(W());$('candError').textContent='';
-    try{if(await change(`candidates/${bid}/accept-batch`,{actor:val('actor').value,reason:val('reason').value,confirm_association:val('assoc').checked},'已接纳无争议候选；同一行有多个值或数量待修正的，仍需逐条处理。'))releaseKept(snap)}
+    try{if(await change(`candidates/${bid}/accept-batch`,{actor:val('actor').value,reason:val('reason').value,confirm_association:val('assoc').checked},'已接纳无争议候选；同一行有多个值或数量待修正的，仍需逐条处理。')){releaseKept(snap);const n=firstFocus();if(n)setFocus(n.type,n.id)}}
     catch(e){if($('candError'))$('candError').textContent=e.message;else throw e}
   });
   $('candReject').onclick=()=>{if(!val('reason').value.trim()){$('candError').textContent='请在“裁定理由”写明拒绝理由';return}submit('reject')};
@@ -413,7 +414,7 @@ function viewWarnings(){
   W().innerHTML=head('解析警告',`${c.warnings.length} 项`,{sub:'对照右侧原件确认没有遗漏后记录结论；未记录前不能批准。',chip:c.review_note?'<span class="chip tone-ok">已记录核查</span>':'<span class="chip tone-bad">未核查</span>'})+
   `<div class="w-body"><ul class="warn-list">${c.warnings.map(w=>`<li>${esc(w)}</li>`).join('')}</ul>${modelState.requests_enabled?'<div class="btn-row"><button type="button" class="btn btn-primary" id="warnModel">让模型提取询价行</button></div>':''}<section class="card"><label>人工核查结论<textarea data-keep="note" rows="3" placeholder="例如：已逐行对照附件第1页，未发现遗漏">${esc(c.review_note||'')}</textarea></label><p class="msg error" id="noteError"></p><button type="button" class="btn btn-primary" id="review">记录人工核查</button></section></div>`;
   if(modelState.requests_enabled)$('warnModel').onclick=()=>run(()=>proposeCandidates('model'));
-  $('review').onclick=()=>run(async()=>{const snap=snapshotKept(W());try{if(await change('review',{note:W().querySelector('[data-keep="note"]').value},'已记录解析警告核查说明。'))releaseKept(snap)}catch(e){$('noteError').textContent=e.message}});
+  $('review').onclick=()=>run(async()=>{const snap=snapshotKept(W());try{if(await change('review',{note:W().querySelector('[data-keep="note"]').value},'已记录解析警告核查说明。')){releaseKept(snap);const n=firstFocus();if(n)setFocus(n.type,n.id)}}catch(e){$('noteError').textContent=e.message}});
 }
 
 /* ---------- approval & output ---------- */

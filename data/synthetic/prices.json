@@ -22,5 +22,53 @@
     "lead_time": "演示 7 天",
     "source": "SYN-CATALOG-01 / 人工生成合成价表",
     "kind": "synthetic"
+  },
+  {
+    "part": "66-1234-5",
+    "unit": "EA",
+    "condition": "OH",
+    "currency": "USD",
+    "amount": "320.00",
+    "valid_from": "2026-01-01",
+    "valid_until": "2027-12-31",
+    "lead_time": "演示 7 天",
+    "source": "SYN-CATALOG-01 / 人工生成合成价表",
+    "kind": "synthetic"
+  },
+  {
+    "part": "77-2288",
+    "unit": "EA",
+    "condition": "NE",
+    "currency": "USD",
+    "amount": "46.50",
+    "valid_from": "2026-01-01",
+    "valid_until": "2027-12-31",
+    "lead_time": "演示 7 天",
+    "source": "SYN-CATALOG-01 / 人工生成合成价表",
+    "kind": "synthetic"
+  },
+  {
+    "part": "BRK-204",
+    "unit": "EA",
+    "condition": "FN",
+    "currency": "USD",
+    "amount": "85.00",
+    "valid_from": "2026-01-01",
+    "valid_until": "2027-12-31",
+    "lead_time": "演示 7 天",
+    "source": "SYN-CATALOG-01 / 人工生成合成价表",
+    "kind": "synthetic"
+  },
+  {
+    "part": "VLV-880",
+    "unit": "EA",
+    "condition": "OH",
+    "currency": "USD",
+    "amount": "410.00",
+    "valid_from": "2026-01-01",
+    "valid_until": "2027-12-31",
+    "lead_time": "演示 7 天",
+    "source": "SYN-CATALOG-01 / 人工生成合成价表",
+    "kind": "synthetic"
   }
 ]

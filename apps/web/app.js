@@ -136,10 +136,10 @@ const clarificationTone={awaiting_reply:'bad',received:'warn',resolved:'ok',stal
 function buildQueue(c){
   const s=summarize(c),label=r=>`${r.rfq||'缺询价号'} / ${r.part||'缺件号'}`;
   const groups=[];
+  if(s.cands.length)groups.push({key:'cand',title:'修订候选待审',done:false,items:s.cands.map(({b,x})=>({type:'cand',id:b.id+':'+x.id,title:`${x.fields.rfq||'缺询价号'} / ${x.fields.part||'缺件号'}`,sub:`${engineName(b.engine)} · 数量 ${x.fields.quantity||'缺'}`,tone:'price'}))});
   if(c.warnings.length)groups.push({key:'warn',title:'解析警告',done:!s.needsReview,items:s.needsReview?[{type:'warnings',id:'w',title:`${c.warnings.length} 项解析警告`,sub:'对照原件核查完整性后记录结论',tone:'bad'}]:[]});
   groups.push({key:'content',title:'内容核对',done:!s.content.length,items:s.content.map(r=>({type:'row',id:r.id,title:label(r),sub:RfqUiState.issues(r).filter(x=>!RfqUiState.isPrice(x)&&x.code!=='open_clarification').map(x=>x.message).join(' · '),tone:'bad',mono:true}))});
   groups.push({key:'clarify',title:'澄清',done:(c.clarifications||[]).length>0&&!s.openQs.length,items:s.openQs.map(q=>({type:'q',id:q.id,title:`${q.rfq||'缺询价号'} / ${q.part||'缺件号'} · ${fieldNames[q.field]||'重复归属'}`,sub:RfqUiState.questionLabel(q),tone:clarificationTone[q.state]||'bad'}))});
-  if(s.cands.length)groups.push({key:'cand',title:'修订候选待审',done:false,items:s.cands.map(({b,x})=>({type:'cand',id:b.id+':'+x.id,title:`${x.fields.rfq||'缺询价号'} / ${x.fields.part||'缺件号'}`,sub:`${engineName(b.engine)} · 数量 ${x.fields.quantity||'缺'}`,tone:'price'}))});
   groups.push({key:'price',title:'核价',done:!s.priced.length,items:s.priced.map(r=>({type:'price',id:r.id,title:label(r),sub:(rowPriceIssue(r)||'')+(RfqUiState.issues(r).some(x=>!RfqUiState.isPrice(x))?' · 先完成内容核对':''),tone:'price',mono:true}))});
   const blocked=s.issues.length||s.needsReview;
   groups.push({key:'approve',title:'批准',done:s.ready,items:s.active.length&&!s.ready?[{type:'approve',id:'a',title:s.stale.length?`${s.stale.length} 行旧批准已失效`:'批准当前版本',sub:blocked?`仍有 ${s.issues.length} 行阻断${s.needsReview?' · 警告未核查':''}`:`工作版本 ${c.revision} · 价表 v${c.price_version}`,tone:blocked?'off':s.stale.length?'warn':'ready'}]:[]});
@@ -360,7 +360,7 @@ $('mailMixed').onclick=()=>run(()=>importCase('/semantic-demo/mail-mixed',{metho
 $('proseDemo').onclick=()=>run(()=>importCase('/semantic-demo/prose',{method:'POST'},'合成正文已导入，请审阅修订候选。'));
 $('revisionDemo').onclick=()=>run(()=>importCase('/semantic-demo/revision',{method:'POST'},'合成修订已导入，请审阅修订候选。'));
 let modelState={};
-async function refreshModelState(){const h=modelState=await request('/health');$('mode').className='mode '+(h.model_connected?'on':'off');$('modeText').textContent=h.requests_enabled?`真实模型已启用 · 本轮 ${h.request_count} 次 · ${h.model_connected?'有成功响应':'尚无成功响应'}`:'离线本地 · 模型未启用';$('mode').title='本轮历史连接状态；不代表持续在线。平台未接入。'}
+async function refreshModelState(){const h=modelState=await request('/health');$('mode').className='mode '+(h.requests_enabled?'on':'off');$('modeText').textContent=h.requests_enabled?`真实模型已启用${h.request_count?` · 本轮 ${h.request_count} 次`:''}`:'离线本地 · 模型未启用';$('mode').title='本轮历史连接状态；不代表持续在线。平台未接入。'}
 async function boot(){
   try{await refreshModelState()}
   catch(e){$('mode').className='mode down';$('modeText').textContent='本地 API 未连接';notice(e.message,true);return}

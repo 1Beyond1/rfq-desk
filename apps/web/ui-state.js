@@ -19,7 +19,7 @@ const RfqUiState=(()=>{
   if(!Number.isSafeInteger(c.active))return '';
   return `有效 ${c.active} 行 · 批准 ${c.approved??0} 行 · 异常 ${c.open_issues??0} 项 · 未决澄清 ${c.open_clarifications??0} 项${c.pending_parse_review?' · 待核查解析':''}${c.pending_candidates?' · 待审候选 '+c.pending_candidates:''}`;
  }
- function nextStep(c){return c.pending_parse_review?'先核查解析警告':c.pending_candidates?'审阅当前候选':c.open_clarifications?'继续处理澄清':c.issue_rows?'核对异常与价格依据':c.active&&c.approved===c.active?'查看当前输出':c.active?'人工批准当前版本':'导入并核对询价原件'}
+ function nextStep(c){return c.pending_candidates?'审阅当前候选':c.pending_parse_review?'先核查解析警告':c.open_clarifications?'继续处理澄清':c.issue_rows?'核对异常与价格依据':c.active&&c.approved===c.active?'查看当前输出':c.active?'人工批准当前版本':'导入并核对询价原件'}
  const reviewLabels={received:'收到 · 尚未审阅',pending_review:'有当前候选待审',no_answer:'已审阅 · 未回答此字段',reviewed_rejected:'已审阅 · 候选被拒绝',applied:'已回填'};
  function replyLabel(r){return reviewLabels[r.review_status]||(r.applications?.length?'已回填':'收到 · 尚未审阅')}
  function questionLabel(q){
