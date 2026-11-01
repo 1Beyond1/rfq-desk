@@ -84,6 +84,18 @@ def clean_value(field,value,spec):
     if field=='condition':return re.sub(r'^(?:件状|件况|condition|cond\.?)[:：\s]*','',value,flags=re.I) or None
     return value
 
+UNIT_AFTER=re.compile(r'\s*(EACH|EA|PCS|PC|UNITS|UNIT|SETS|SET|KITS|KIT|[个件只根套台支片块条])(?![A-Za-z])',re.I)
+
+def unit_after_quantity(fields,materials):
+    """A unit word right after the cited quantity is the unit when the model left it out; it stays a literal span."""
+    cited=fields.get('quantity',{}).get('evidence')
+    if not cited or 'unit' in fields:return
+    unit=next((u for f in materials['files'] for u in f['units'] if u['file']==cited['file'] and u['location']==cited['location']),None)
+    match=UNIT_AFTER.match(unit['text'],cited['end']) if unit else None
+    if match:
+        a,b=match.span(1)
+        fields['unit']={'value':match.group(1),'evidence':{k:cited[k] for k in ('file','sha256','location')}|{'start':a,'end':b,'quote':match.group(1)}}
+
 def move_misplaced(spec):
     """An identifier given only as rfq is the part unless it reads as a request number; a unit word is not a condition."""
     rfq=spec.get('rfq')
@@ -129,6 +141,7 @@ def expand_compact_payload(payload,materials):
             u,starts=found;occ=spec.get('occurrence',0)
             a=starts[occ] if type(occ) is int and 0<=occ<len(starts) else starts[0]
             fields[field]={'value':v,'evidence':{k:u[k] for k in ('file','sha256','location')}|{'start':a,'end':a+len(v),'quote':v}}
+        unit_after_quantity(fields,materials)
         # Without a cited part there is no line for a person to review.
         if 'part' not in fields:dropped+=len(fields);continue
         output.append({'fields':fields})

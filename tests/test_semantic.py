@@ -226,3 +226,11 @@ def test_misplaced_identifier_and_unit_are_moved():
     assert f['part']['value']=='66-4400-1' and 'rfq' not in f and f['unit']['value']=='EA' and 'condition' not in f
     (e,_),_m=_resolve('询价 RFQ-2395 详见附件',{'rfq':('RFQ-2395',1)})
     assert e=={'candidates':[]}
+
+def test_unit_right_after_the_quantity_is_filled_in():
+    for text,qty,unit in (('P/N MR-5 要 8 个，有货吗','8','个'),('P/N MR-5 Qty: 六 EA Cond: NE','六','EA'),('50 units of part MR-5','50','units')):
+        (e,_),m=_resolve(text,{'part':('MR-5',1),'quantity':(qty,1)})
+        assert e['candidates'][0]['fields']['unit']['value']==unit
+        assert semantic.validate_payload(e,m)[0]['fields']['unit']==unit
+    (e,_),_m=_resolve('P/N MR-5 qty 8 NE',{'part':('MR-5',1),'quantity':('8',1)})
+    assert 'unit' not in e['candidates'][0]['fields']
