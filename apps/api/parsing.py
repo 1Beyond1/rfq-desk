@@ -13,10 +13,10 @@ import openpyxl
 import pdfplumber
 
 ALIASES = {
-    'rfq': ['rfqno', 'rfqnumber', 'rfq', '询价号', '询价单号'], 'part': ['partnumber', 'partno', 'partnum', 'pn', '件号', '零件号', '料号', 'mpn'],
-    'description': ['description', '描述', '品名'], 'quantity': ['quantity', 'qty', '数量', '需求数量', '询价数量'],
-    'unit': ['unitofmeasure', 'uom', 'um', 'unit', '单位'], 'condition': ['件状条件', 'condition', 'cond', 'cd'],
-    'due': ['duedate', '截止日期', '截止时间', '回复期限'], 'requirements': ['询价产品要求', 'requirements'],
+    'rfq': ['rfqno', 'rfqnumber', 'rfq', '询价号', '询价单号', '询价编号', '询单号'], 'part': ['partnumber', 'partno', 'partnum', 'part', 'pn', '件号', '零件号', '零件编号', '部件号', '料号', '物料号', 'mpn'],
+    'description': ['description', 'desc', '描述', '品名', '名称', '零件名称'], 'quantity': ['quantity', 'qty', '数量', '需求数量', '询价数量'],
+    'unit': ['unitofmeasure', 'uom', 'um', 'unit', '单位', '计量单位'], 'condition': ['件状条件', '件状', '件况', '件状要求', 'condition', 'cond', 'cd'],
+    'due': ['duedate', '截止日期', '截止时间', '回复期限'], 'requirements': ['询价产品要求', '特殊要求', 'requirements'],
     'priority': ['优先级', 'priority'],
 }
 

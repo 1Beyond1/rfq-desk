@@ -219,3 +219,11 @@ def test_common_unit_words_are_not_questioned_but_unknown_codes_are():
     for unit in ('ea','pieces','Units','个'):
         assert agent.draft_clarification(base(candidate_batches=[{'expected_revision':1,'candidates':[cand(unit)]}]))['questions']==[],unit
     assert '“ZZ”' in agent.draft_clarification(base(candidate_batches=[{'expected_revision':1,'candidates':[cand('ZZ')]}]))['draft']
+
+def test_a_chinese_table_is_read_and_an_empty_file_is_refused(client):
+    csv='询价号,件号,零件名称,数量,计量单位,件状,特殊要求\nQ-1,ABC-1,阀门,5,EA,NE,含证书\n'.encode()
+    case=client.post('/api/import',files={'file':('t.csv',csv)}).json()
+    row=case['rows'][0]
+    assert (row['rfq'],row['part'],row['description'],row['quantity'],row['unit'],row['condition'],row['requirements'])==('Q-1','ABC-1','阀门','5','EA','NE','含证书')
+    r=client.post('/api/import',files={'file':('empty.txt',b'  ')})
+    assert r.status_code==422 and '空' in r.json()['detail']

@@ -91,6 +91,7 @@ def cases():
 
 def import_bytes(name, data):
     if Path(name).suffix.lower() not in ('.txt','.eml','.csv','.xlsx','.pdf'):raise HTTPException(422,'支持 EML、CSV、XLSX、TXT 和文本型 PDF')
+    if not data.strip():raise HTTPException(422,'文件是空的，没有导入')
     try:
         parsed = {'rows':[],'warnings':['文本材料未执行规则表格提取；请审阅候选并核查完整性'],'fragments':[]} if Path(name).suffix.lower()=='.txt' else parse_file(name,data)
     except Exception: raise HTTPException(422,'文件无法解析，请检查文件格式和编码')
