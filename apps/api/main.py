@@ -221,7 +221,7 @@ async def propose_candidates(id:str,change:Change,adapter=Depends(get_adapter)):
         current.setdefault('candidate_batches',[]).append(result)
         event(current,'candidate_propose',{'batch':result['id'],'engine':result['engine'],'model_status':result['model_status'],'count':len(result['candidates']),'metrics':result['metrics'],'remote_consent':consent})
     updated=mutate(id,change,store)
-    return {'case':updated,'extraction':{'status':'pending_review','model_status':result['model_status'],'requests':result['metrics']['requests'],'engine':result['engine'],'rejected_candidates':result['metrics']['rejected_candidates'],'dropped_fields':result['metrics']['dropped_fields']}}
+    return {'case':updated,'extraction':{'status':'pending_review','count':len(result['candidates']),'model_status':result['model_status'],'requests':result['metrics']['requests'],'engine':result['engine'],'rejected_candidates':result['metrics']['rejected_candidates'],'dropped_fields':result['metrics']['dropped_fields']}}
 
 @app.post('/api/cases/{id}/candidates/{batch_id}/{candidate_id}/review')
 def review_candidate(id:str,batch_id:str,candidate_id:str,change:Change):

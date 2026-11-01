@@ -277,7 +277,7 @@ async function proposeCandidates(mode){
   if(mode==='model'&&modelState.requests_enabled&&!consent)return;
   const ctx=interaction.capture(current),task=interaction.begin(ctx,'propose');
   try{const response=await request(`/cases/${ctx.caseId}/candidates/propose`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:ctx.revision,values:{mode,remote_consent:consent}})});
-    const x=response.extraction,found=(x.candidates||[]).length,stated={unsupported:'没有在这份原件里找到带件号的询价行。',blocked_material:'这份原件不能发送给模型。',not_configured:'模型服务未配置。',disabled:'模型提取未启用。'};
+    const x=response.extraction,found=x.count||0,stated={unsupported:'没有在这份原件里找到带件号的询价行。',blocked_material:'这份原件不能发送给模型。',not_configured:'模型服务未配置。',disabled:'模型提取未启用。'};
     applyResponse(response.case,ctx,`${found?`提取到 ${found} 条候选。`:stated[x.status]||'没有提取到候选。'}${x.rejected_candidates?`另有 ${x.rejected_candidates} 条因缺件号或不合规被忽略。`:''}${x.dropped_fields?`${x.dropped_fields} 个字段没有可靠原文，已丢弃。`:''}${found?'正式行尚未改变，需逐条审阅。':'正式行没有变化。'}`)}
   catch(e){if(interaction.active(ctx,current))throw e;activity(ctx,'候选提取失败：'+e.message,true)}finally{interaction.finish(task);if(mode==='model')await refreshModelState()}
 }

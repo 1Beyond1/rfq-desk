@@ -206,5 +206,23 @@ def test_quantity_words_and_placeholders():
     assert d==1 and 'quantity' not in e['candidates'][0]['fields']
 
 def test_candidate_without_a_cited_part_is_dropped():
-    (e,d),_m=_resolve('询价 R1 详见附件',{'rfq':('R1',1)})
+    (e,d),_m=_resolve('询价 RQ-1 详见附件',{'rfq':('RQ-1',1)})
     assert e=={'candidates':[]} and d==1
+
+def test_extraction_reports_how_many_candidates_it_found(client):
+ class One:
+  status='configured'
+  async def extract(self,m,b):
+   f=m['files'][0];unit=f['units'][0];start=unit['text'].index('X')
+   return semantic.AdapterReply({'candidates':[{'fields':{'part':{'value':'X','evidence':{k:unit[k] for k in ('file','sha256','location')}|{'start':start,'end':start+1,'quote':'X'}}}}]},10,1,'parsed','test')
+ main.app.dependency_overrides[semantic.get_adapter]=lambda:One()
+ r=client.post('/api/import',files={'file':('mail.txt','Part: X\nQuantity: 2'.encode())}).json()
+ res=client.post(f"/api/cases/{r['id']}/candidates/propose",json={'revision':r['revision'],'values':{'mode':'model','remote_consent':True}})
+ assert res.status_code==200 and res.json()['extraction']['count']==1
+
+def test_misplaced_identifier_and_unit_are_moved():
+    (e,_),_m=_resolve('RFQ: please quote 66-4400-1 qty 8 EA.',{'rfq':('66-4400-1',1),'quantity':('8',1),'condition':('EA',1)})
+    f=e['candidates'][0]['fields']
+    assert f['part']['value']=='66-4400-1' and 'rfq' not in f and f['unit']['value']=='EA' and 'condition' not in f
+    (e,_),_m=_resolve('询价 RFQ-2395 详见附件',{'rfq':('RFQ-2395',1)})
+    assert e=={'candidates':[]}

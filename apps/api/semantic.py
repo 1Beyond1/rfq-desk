@@ -84,6 +84,13 @@ def clean_value(field,value,spec):
     if field=='condition':return re.sub(r'^(?:件状|件况|condition|cond\.?)[:：\s]*','',value,flags=re.I) or None
     return value
 
+def move_misplaced(spec):
+    """An identifier given only as rfq is the part unless it reads as a request number; a unit word is not a condition."""
+    rfq=spec.get('rfq')
+    if not spec.get('part') and isinstance(rfq,dict) and isinstance(rfq.get('value'),str) and not re.match(r'\s*(?:RFQ|RQ|询)',rfq['value'],re.I):spec['part']=spec.pop('rfq')
+    condition=spec.get('condition')
+    if not spec.get('unit') and isinstance(condition,dict) and isinstance(condition.get('value'),str) and condition['value'].strip().upper() in ('EA','EACH','PC','PCS','个','件','只','根','套'):spec['unit']=spec.pop('condition')
+
 CN_NUMERALS='一二两三四五六七八九十百千万'
 
 def split_quantity(spec):
@@ -107,7 +114,7 @@ def expand_compact_payload(payload,materials):
     output=[];dropped=0
     for candidate in payload['candidates']:
         if not isinstance(candidate,dict) or set(candidate)!={'fields'} or not isinstance(candidate['fields'],dict):raise ValueError('候选字段结构无效')
-        fields={};split_quantity(candidate['fields'])
+        fields={};move_misplaced(candidate['fields']);split_quantity(candidate['fields'])
         for field,spec in candidate['fields'].items():
             if not isinstance(spec,dict):raise ValueError('候选字段结构无效')
             if 'evidence' in spec:fields[field]=spec;continue
