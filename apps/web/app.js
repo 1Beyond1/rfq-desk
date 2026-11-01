@@ -367,6 +367,6 @@ async function boot(){
   document.querySelectorAll('#mobileNav [data-view]').forEach(b=>b.setAttribute('aria-current',String(b.dataset.view===document.body.dataset.view)));
   await refreshList();
   const hashed=location.hash.slice(1);if(/^[a-zA-Z0-9_-]{1,64}$/.test(hashed)&&caseList.some(c=>c.id===hashed))await openCase(hashed);
-  try{const list=await request('/official');$('official').innerHTML=list.length?list.map((p,i)=>`<button type="button" class="list-btn" data-official="${i}">${esc(p)}</button>`).join(''):'<p class="hint">未发现本地官方素材。</p>';document.querySelectorAll('[data-official]').forEach(b=>b.onclick=()=>run(()=>importCase('/official/'+b.dataset.official,{method:'POST'},'官方素材仅本地解析；未发送至模型。')))}catch{$('official').innerHTML='<p class="hint">本地官方素材列表读取失败。</p>'}
+  try{const list=await request('/official');$('official').closest('details').hidden=!list.length;$('official').innerHTML=list.length?list.map((p,i)=>`<button type="button" class="list-btn" data-official="${i}">${esc(p)}</button>`).join(''):'<p class="hint">未发现本地官方素材。</p>';document.querySelectorAll('[data-official]').forEach(b=>b.onclick=()=>run(()=>importCase('/official/'+b.dataset.official,{method:'POST'},'官方素材仅本地解析；未发送至模型。')))}catch{$('official').innerHTML='<p class="hint">本地官方素材列表读取失败。</p>'}
 }
 renderLocalDraftStatus();
