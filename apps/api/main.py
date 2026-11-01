@@ -8,12 +8,14 @@ import csv
 import io
 import uuid
 
+from datetime import datetime
+import hashlib
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 from .parsing import parse_file
-from . import price_intake, clarifications
+from . import price_intake, clarifications, agent
 from .quote_html import render_quote
 from .materials import read_materials
 from .semantic import get_adapter, propose, accept_candidate, synthetic_remote_allowed
@@ -29,6 +31,7 @@ def connection():
     DB.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB) as c:
         c.execute('CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS agent_turns (seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, body TEXT NOT NULL)')
         yield c
 
 def save(c, case):
@@ -111,6 +114,9 @@ async def append_material(id:str,revision:int=Form(...),file:UploadFile=File(...
     name=Path(file.filename or '').name
     if not name or Path(name).suffix.lower() not in ('.txt','.eml','.pdf'):raise HTTPException(422,'追加原件支持 TXT / EML / 文本PDF')
     if len(data)>20*1024*1024:raise HTTPException(413,'文件上限20MB')
+    return append_file(id,revision,name,data)
+
+def append_file(id,revision,name,data):
     with connection() as c:
         c.execute('BEGIN IMMEDIATE');case=load(c,id)
         if revision!=case['revision']:raise HTTPException(409,'工作单已更新，请重新选择原件')
@@ -207,6 +213,13 @@ def semantic_demo(name:str):
     p=ROOT/'data/synthetic/semantic'/choices[name]
     return import_bytes(p.name,p.read_bytes())
 
+def store_batch(id,change,content,result,consent):
+    def store(current,values):
+        if case_materials(current)['snapshot']!=content['snapshot']:raise ValueError('提取期间原件变化，未保存候选')
+        current.setdefault('candidate_batches',[]).append(result)
+        event(current,'candidate_propose',{'batch':result['id'],'engine':result['engine'],'model_status':result['model_status'],'count':len(result['candidates']),'metrics':result['metrics'],'remote_consent':consent})
+    return mutate(id,change,store)
+
 @app.post('/api/cases/{id}/candidates/propose')
 async def propose_candidates(id:str,change:Change,adapter=Depends(get_adapter)):
     with connection() as c:case=load(c,id)
@@ -216,11 +229,7 @@ async def propose_candidates(id:str,change:Change,adapter=Depends(get_adapter)):
     try:result=await propose(case,content,change.values.get('mode','model'),adapter,consent or synthetic_remote_allowed(content,ROOT))
     except ValueError as e:raise HTTPException(422,str(e))
     if 'id' not in result:return {'case':view(case),'extraction':result}
-    def store(current,values):
-        if case_materials(current)['snapshot']!=content['snapshot']:raise ValueError('提取期间原件变化，未保存候选')
-        current.setdefault('candidate_batches',[]).append(result)
-        event(current,'candidate_propose',{'batch':result['id'],'engine':result['engine'],'model_status':result['model_status'],'count':len(result['candidates']),'metrics':result['metrics'],'remote_consent':consent})
-    updated=mutate(id,change,store)
+    updated=store_batch(id,change,content,result,consent)
     return {'case':updated,'extraction':{'status':'pending_review','count':len(result['candidates']),'model_status':result['model_status'],'requests':result['metrics']['requests'],'engine':result['engine'],'rejected_candidates':result['metrics']['rejected_candidates'],'dropped_fields':result['metrics']['dropped_fields']}}
 
 @app.post('/api/cases/{id}/candidates/{batch_id}/{candidate_id}/review')
@@ -437,3 +446,82 @@ def audited_export(id,format,revision,route):
 def export(id:str,format:str='json',revision:int|None=None):
     # Compatibility: the current frontend still uses this auditable legacy GET for preview.
     return audited_export(id,format,revision,'legacy_get')
+
+
+# ---------- 询价 Agent ----------
+AGENT_SHORT_QUESTION=120
+
+class AgentStart(BaseModel):
+    text:str
+    consent:bool=False
+
+class AgentMessage(BaseModel):
+    message:str
+    consent:bool=False
+
+def get_agent_session():
+    from .model_config import ModelSettings
+    s=ModelSettings.from_env()
+    return agent.ModelSession(s) if s.configured and s.enabled else None
+
+def official_material(content):
+    """Official samples stay on this machine; consent does not change that."""
+    folder=ROOT/'data/raw/official-rfq'
+    known={hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob('*') if p.is_file()} if folder.is_dir() else set()
+    return any(f['sha256'] in known for f in content['files'])
+
+class CaseWorkspace:
+    def __init__(self,id,adapter):self.id=id;self.adapter=adapter
+    def case(self):
+        with connection() as c:return load(c,self.id)
+    def content(self,case):return case_materials(case)
+    def add_mail(self,text):
+        case=self.case();data=text.encode()
+        if any(f['sha256']==hashlib.sha256(data).hexdigest() for f in case_materials(case)['files']):raise ValueError('这封邮件已经在工作单里')
+        name=f"邮件-{datetime.now().strftime('%m%d-%H%M%S')}.txt"
+        try:append_file(self.id,case['revision'],name,data)
+        except HTTPException as e:raise ValueError(e.detail)
+        return name
+    async def extract(self):
+        case=self.case();content=case_materials(case)
+        result=await propose(case,content,'model',self.adapter,True)
+        if 'id' not in result:return {'status':'没有提取到候选','detail':result['status']}
+        try:store_batch(self.id,Change(revision=case['revision'],values={}),content,result,True)
+        except HTTPException as e:raise ValueError(e.detail)
+        return {'status':'已生成待审候选','rejected':result['metrics']['rejected_candidates'],'dropped_fields':result['metrics']['dropped_fields']}
+
+def agent_turns(id):
+    with connection() as c:return [json.loads(b) for (b,) in c.execute('SELECT body FROM agent_turns WHERE case_id=? ORDER BY seq',(id,))]
+
+@app.post('/api/agent/start')
+def agent_start(body:AgentStart,session=Depends(get_agent_session)):
+    """Files a pasted mail as an original. The agent turn that follows is a separate request, so a model failure loses nothing."""
+    if session is None:raise HTTPException(409,'模型未启用，请用导入原件的方式处理')
+    if not body.consent:raise HTTPException(422,'请先同意把这封邮件发送给模型服务')
+    text=body.text.strip()
+    if len(text)<10:raise HTTPException(422,'内容太短，请贴完整的询价邮件')
+    if len(text)>agent.MAX_MESSAGE:raise HTTPException(422,'内容过长，请分段发送')
+    return import_bytes(f"邮件-{datetime.now().strftime('%m%d-%H%M%S')}.txt",text.encode())
+
+@app.get('/api/cases/{id}/agent')
+def agent_log(id:str):
+    with connection() as c:load(c,id)
+    return {'turns':agent_turns(id)}
+
+@app.post('/api/cases/{id}/agent')
+async def agent_turn(id:str,body:AgentMessage,session=Depends(get_agent_session),adapter=Depends(get_adapter)):
+    if session is None:raise HTTPException(409,'模型未启用，询价 Agent 不可用；工作单其余功能不受影响')
+    with connection() as c:case=load(c,id)
+    content=case_materials(case)
+    if official_material(content):raise HTTPException(422,'这张工作单含本地官方素材，不发送给模型')
+    # A sample's own text needs no consent, but something long typed into it may be a real mail.
+    if not (body.consent or (synthetic_remote_allowed(content,ROOT) and len(body.message)<=AGENT_SHORT_QUESTION)):raise HTTPException(422,'请先同意把本工作单内容发送给模型服务')
+    original=any(body.message.strip()==f.read_text(encoding='utf-8',errors='replace').strip() for f in (ROOT/'var/uploads'/id).glob('*.txt'))
+    try:result=await agent.run_turn(CaseWorkspace(id,adapter),body.message,agent_turns(id),session,can_add_mail=not original)
+    except ValueError as e:raise HTTPException(422,str(e))
+    except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试；工作单没有变化')
+    turn={'message':body.message,'at':datetime.now().isoformat(timespec='seconds'),**result}
+    with connection() as c:
+        c.execute('INSERT INTO agent_turns (case_id,body) VALUES (?,?)',(id,json.dumps(turn,ensure_ascii=False)))
+        case=load(c,id)
+    return {'turn':turn,'case':view(case)}

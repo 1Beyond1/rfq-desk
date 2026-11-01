@@ -222,6 +222,7 @@ def get_adapter():
 def synthetic_remote_allowed(materials,root):
     sha=lambda p:__import__('hashlib').sha256(p.read_bytes()).hexdigest()
     allowed={sha(root/'data/synthetic/semantic'/name) for name in ['prose-cn.eml','forward-revision.eml'] if (root/'data/synthetic/semantic'/name).is_file()}
+    allowed|={sha(p) for p in (root/'data/synthetic/realistic-mail').glob('*.eml')}
     for folder,limit in [('model-live-20261027',6),('competitive-20261028',8),('goal-readiness-20261029',6)]:
         manifest=root/'data/synthetic'/folder/'ALLOWLIST.json'
         if manifest.is_file():

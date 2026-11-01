@@ -360,7 +360,7 @@ $('mailMixed').onclick=()=>run(()=>importCase('/semantic-demo/mail-mixed',{metho
 $('proseDemo').onclick=()=>run(()=>importCase('/semantic-demo/prose',{method:'POST'},'合成正文已导入，请审阅修订候选。'));
 $('revisionDemo').onclick=()=>run(()=>importCase('/semantic-demo/revision',{method:'POST'},'合成修订已导入，请审阅修订候选。'));
 let modelState={};
-async function refreshModelState(){const h=modelState=await request('/health');$('mode').className='mode '+(h.requests_enabled?'on':'off');$('modeText').textContent=h.requests_enabled?`真实模型已启用${h.request_count?` · 本轮 ${h.request_count} 次`:''}`:'离线本地 · 模型未启用';$('mode').title='本轮历史连接状态；不代表持续在线。平台未接入。'}
+async function refreshModelState(){const h=modelState=await request('/health');$('mode').className='mode '+(h.requests_enabled?'on':'off');$('modeText').textContent=h.requests_enabled?`真实模型已启用${h.request_count?` · 本轮 ${h.request_count} 次`:''}`:'离线本地 · 模型未启用';$('mode').title='本轮历史连接状态；不代表持续在线。平台未接入。';$('agentTool').hidden=$('landAgent').hidden=!h.requests_enabled;$('uploadLandingBtn').classList.toggle('btn-primary',!h.requests_enabled)}
 async function boot(){
   try{await refreshModelState()}
   catch(e){$('mode').className='mode down';$('modeText').textContent='本地 API 未连接';notice(e.message,true);return}

@@ -68,8 +68,20 @@
     <span class="eyebrow">MATERIALS · QUOTATION OPERATIONS</span>
     <h2>一张询价，从邮件到放行报价。</h2>
     <p>左侧是挡住这单报价的事，中间就地处理，右侧始终对照原件。没有唯一有效依据的行不会被批准，未答清的问题不会被当成已解决。</p>
+    <form class="land-agent" id="landAgent" hidden>
+      <label for="agentMail"><b>询价 Agent</b><span>贴一封询价邮件，它会提取询价行、查价，并告诉你缺什么。接纳、改价和批准仍由你来做。</span></label>
+      <textarea id="agentMail" rows="5" maxlength="12000" placeholder="把询价邮件贴在这里"></textarea>
+      <label class="agent-consent"><input id="agentMailConsent" type="checkbox">同意把这封邮件发送给模型服务（不要贴不能外传的内容）</label>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary" id="agentMailSend">交给 Agent</button>
+        <span class="hint">或用合成邮件试试：</span>
+        <button type="button" class="btn btn-sm" data-agent-sample="mail-en">英文散文</button>
+        <button type="button" class="btn btn-sm" data-agent-sample="mail-revision">转发修订</button>
+        <button type="button" class="btn btn-sm" data-agent-sample="mail-mixed">一句话多件</button>
+      </div>
+    </form>
     <div class="btn-row">
-      <label class="btn btn-primary file-btn"><span>导入询价原件</span><input id="uploadLanding" type="file" accept=".eml,.xlsx,.pdf,.txt,.csv"></label>
+      <label class="btn btn-primary file-btn" id="uploadLandingBtn"><span>导入询价原件</span><input id="uploadLanding" type="file" accept=".eml,.xlsx,.pdf,.txt,.csv"></label>
       <button type="button" class="btn" id="start">打开合成演示</button>
       <button type="button" class="btn" id="mailDemo">试试邮件正文提取</button>
     </div>
@@ -84,6 +96,7 @@
 <div id="desk" class="desk" hidden>
   <nav class="queue" id="queuePane" aria-label="待办队列">
     <div id="nextCard" class="next-card" aria-live="polite"></div>
+    <button type="button" class="tool tool-agent" id="agentTool" data-focus="agent" hidden>询价 Agent</button>
     <div class="seg" role="tablist">
       <button type="button" data-queue="todo" aria-selected="true">待办</button>
       <button type="button" data-queue="rows" aria-selected="false">全部询价行</button>

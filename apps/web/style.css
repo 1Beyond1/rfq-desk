@@ -404,3 +404,23 @@ dialog .fields{margin:12px 20px}
   .psrc{grid-template-columns:1fr}
   dialog>*:not(.dlg-head),dialog .fields{margin-left:14px;margin-right:14px}
 }
+
+/* 询价 Agent */
+.land-agent{display:grid;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 0 16px;max-width:620px}
+.land-agent[hidden]{display:none}
+.land-agent>label:first-child{display:grid;gap:2px}
+.land-agent>label:first-child span{color:var(--muted);font-size:13px}
+.land-agent textarea,.agent-chat textarea{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r);resize:vertical}
+.agent-consent{display:flex;gap:6px;align-items:flex-start;font-size:13px;color:var(--muted)}
+.tool-agent{margin:8px 0;font-weight:600;color:var(--accent);border:1px solid var(--accent-soft);background:var(--accent-soft);border-radius:var(--r);width:100%}
+.tool-agent[hidden]{display:none}
+.agent-chat{display:grid;gap:12px}
+.agent-chat form{display:grid;gap:8px}
+.agent-log{display:grid;gap:8px;max-height:56vh;overflow-y:auto}
+.agent-msg{padding:8px 12px;border-radius:10px;overflow-wrap:anywhere;min-width:0}
+.agent-msg.me{justify-self:end;max-width:85%;background:var(--accent-soft);white-space:pre-wrap;max-height:200px;overflow-y:auto}
+.agent-msg.bot{justify-self:start;max-width:95%;background:var(--pane);border:1px solid var(--line-2)}
+.agent-text{white-space:pre-wrap}
+.agent-msg .hint{margin:6px 0 0}
+.agent-draft{margin-top:8px}
+.agent-draft pre{white-space:pre-wrap;font:inherit;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;margin:6px 0}

@@ -473,3 +473,73 @@ function viewLog(){
 }
 
 run(boot);
+
+
+/* ---------- 询价 Agent ---------- */
+const agentChat={caseId:null,turns:[],busy:false,consent:false,text:'',pending:'',loaded:false};
+const agentToolNames={get_case_state:'读取工作单',read_original:'读原文',extract_candidates:'提取候选',add_mail_to_case:'把邮件加入工作单',check_prices:'查价',explain_row:'查询价行依据',draft_clarification:'起草澄清邮件',search_rules:'查规则'};
+async function agentLoad(){
+  const id=current.id;agentChat.caseId=id;agentChat.turns=[];agentChat.loaded=false;agentChat.text='';agentChat.pending='';
+  try{const log=await request(`/cases/${id}/agent`);if(current?.id===id){agentChat.turns=log.turns;agentChat.loaded=true;if(focus?.type==='agent')renderWork()}}
+  catch(e){notice(e.message,true)}
+}
+async function agentSend(message){
+  const id=current.id;
+  agentChat.busy=true;agentChat.pending=message;agentChat.text='';renderWork();
+  try{
+    const r=await request(`/cases/${id}/agent`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,consent:agentChat.consent})});
+    if(agentChat.caseId===id)agentChat.turns.push(r.turn);
+    agentChat.busy=false;agentChat.pending='';
+    if(current?.id===id)show(r.case);else activity({caseId:id,title:r.case.title},'询价 Agent 已完成回复',false);
+  }catch(e){
+    agentChat.busy=false;agentChat.pending='';
+    if(agentChat.caseId===id)agentChat.text=message;
+    if(current?.id===id&&focus?.type==='agent')renderWork();
+    notice(e.message,true);
+  }
+}
+views.agent=function(){
+  if(agentChat.caseId!==current.id)agentLoad();
+  const turn=t=>`<div class="agent-msg me">${esc(t.message)}</div><div class="agent-msg bot"><div class="agent-text">${esc(t.reply)}</div>
+    ${t.tools?.length?`<p class="hint">做了：${t.tools.map(n=>esc(agentToolNames[n]||n)).join('、')}</p>`:''}
+    ${t.draft?`<details class="agent-draft" open><summary>可发给对方的澄清邮件（未发送）</summary><pre>${esc(t.draft)}</pre><button type="button" class="btn btn-sm" data-agent-copy>复制</button></details>`:''}</div>`;
+  const done=agentChat.turns.at(-1),next=!agentChat.busy&&done?firstFocus():null;
+  W().innerHTML=head('询价 Agent','这张工作单的助手',{sub:'它能提取候选、查价、解释依据、起草澄清邮件。接纳候选、改字段、录价、批准和发送都由你来做。'})+`
+  <section class="card agent-chat">
+    <div class="agent-log" id="agentLog">
+      ${agentChat.turns.length||agentChat.pending?'':`<p class="hint">试试：“处理这张询价”“为什么还不能批准”“给对方写封邮件问清楚”，或者直接贴来对方的回信。</p>`}
+      ${agentChat.turns.map(turn).join('')}
+      ${agentChat.pending?`<div class="agent-msg me">${esc(agentChat.pending)}</div><div class="agent-msg bot"><span class="hint">正在处理，可能需要十几秒…</span></div>`:''}
+    </div>
+    ${next?`<div class="btn-row agent-next"><button type="button" class="btn btn-primary" id="agentNext">下一步：${esc(done.next_step)} →</button></div>`:''}
+    <form id="agentForm">
+      <textarea id="agentInput" rows="3" maxlength="12000" placeholder="提问，或贴来对方的回信" aria-label="发给询价 Agent 的内容" ${agentChat.busy?'disabled':''}>${esc(agentChat.text)}</textarea>
+      <label class="agent-consent"><input id="agentConsent" type="checkbox" ${agentChat.consent?'checked':''}>同意把本工作单的内容发送给模型服务（合成样例上提问不需要；贴真实邮件前请勾选）</label>
+      <div class="btn-row"><button type="submit" class="btn btn-primary" ${agentChat.busy?'disabled':''}>${agentChat.busy?'处理中…':'发送'}</button></div>
+    </form>
+  </section>`;
+  const log=$('agentLog');log.scrollTop=log.scrollHeight;
+  $('agentInput').oninput=e=>{agentChat.text=e.target.value};
+  $('agentConsent').onchange=e=>{agentChat.consent=e.target.checked};
+  $('agentForm').onsubmit=e=>{e.preventDefault();const text=agentChat.text.trim();if(!text){notice('请输入内容',true);return}run(()=>agentSend(text))};
+  if($('agentNext'))$('agentNext').onclick=()=>{const n=firstFocus();setFocus(n.type,n.id)};
+  qsa('[data-agent-copy]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.previousElementSibling.textContent);notice('已复制','ok')}catch{notice('复制失败，请手动选中',true)}});
+};
+function agentOpen(c,message,consent){
+  interaction.desired=c.id;current=null;show(c);
+  agentChat.caseId=c.id;agentChat.turns=[];agentChat.loaded=true;agentChat.text='';agentChat.consent=consent;
+  focus={type:'agent',id:''};render();closeDrawer();
+  return agentSend(message);
+}
+$('landAgent').onsubmit=e=>{e.preventDefault();run(async()=>{
+  const text=$('agentMail').value.trim();
+  if(!text)throw Error('请先贴一封询价邮件');
+  if(!$('agentMailConsent').checked)throw Error('请先勾选同意发送给模型服务');
+  const c=await request('/agent/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,consent:true})});
+  $('agentMail').value='';
+  await agentOpen(c,'我贴了一封询价邮件，已存为本工作单原件。请处理它。',true);
+})};
+document.querySelectorAll('[data-agent-sample]').forEach(b=>b.onclick=()=>run(async()=>{
+  const c=await request('/semantic-demo/'+b.dataset.agentSample,{method:'POST'});
+  await agentOpen(c,'这是一封合成询价邮件，已存为本工作单原件。请处理它。',false);
+}));
