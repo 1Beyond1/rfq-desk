@@ -70,7 +70,8 @@ def validate_payload(payload,materials):
 def literal_starts(field,value,text):
     starts=[];i=0
     while (a:=text.find(value,i))>=0:starts.append(a);i=a+1
-    if field=='quantity' and value.isdigit():starts=[a for a in starts if (a==0 or not text[a-1].isdigit()) and (a+len(value)==len(text) or not text[a+len(value)].isdigit())]
+    # A quantity is a number of its own: not the tail of a part number like 25.6 or 07/6, nor the head of 6.5 or 64.
+    if field=='quantity' and value.isdigit():starts=[a for a in starts if (a==0 or not (text[a-1].isalnum() or text[a-1] in './')) and (a+len(value)==len(text) or not (text[a+len(value)].isdigit() or text[a+len(value):a+len(value)+2].startswith('.') and text[a+len(value)+1:a+len(value)+2].isdigit()))]
     return starts
 
 def clean_value(field,value,spec):

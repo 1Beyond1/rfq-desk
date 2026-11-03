@@ -485,19 +485,27 @@ async function agentLoad(){
 }
 async function agentSend(message){
   const id=current.id;
-  agentChat.busy=true;agentChat.pending=message;agentChat.text='';renderWork();
+  agentChat.busy=true;agentChat.pending=message;agentChat.text='';agentChat.steps=[];renderWork();
+  const poll=setInterval(async()=>{try{const p=await request(`/cases/${id}/agent/progress`);if(p.steps&&agentChat.busy&&agentChat.caseId===id&&p.steps.length!==agentChat.steps.length){agentChat.steps=p.steps;if(focus?.type==='agent'&&current?.id===id)agentPending()}}catch{}},1000);
   try{
     const r=await request(`/cases/${id}/agent`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,consent:agentChat.consent})});
+    clearInterval(poll);
     if(agentChat.caseId===id)agentChat.turns.push(r.turn);
     agentChat.busy=false;agentChat.pending='';
     if(current?.id===id)show(r.case);else activity({caseId:id,title:r.case.title},'询价 Agent 已完成回复',false);
   }catch(e){
+    clearInterval(poll);
     agentChat.busy=false;agentChat.pending='';
     if(agentChat.caseId===id)agentChat.text=message;
     if(current?.id===id&&focus?.type==='agent')renderWork();
     notice(e.message,true);
   }
 }
+function pendingText(){
+  const done=(agentChat.steps||[]).map(n=>esc(agentToolNames[n]||n));
+  return `<span class="hint">${done.length?`已做：${done.join(' → ')}；`:''}正在${done.length?'继续处理':'理解你的消息'}…</span>`;
+}
+function agentPending(){const box=$('agentPending');if(box)box.innerHTML=pendingText()}
 views.agent=function(){
   if(agentChat.caseId!==current.id)agentLoad();
   const turn=t=>`<div class="agent-msg me">${esc(t.message)}</div><div class="agent-msg bot"><div class="agent-text">${esc(t.reply)}</div>
@@ -509,7 +517,7 @@ views.agent=function(){
     <div class="agent-log" id="agentLog">
       ${agentChat.turns.length||agentChat.pending?'':`<p class="hint">试试：“处理这张询价”“为什么还不能批准”“给对方写封邮件问清楚”，或者直接贴来对方的回信。</p>`}
       ${agentChat.turns.map(turn).join('')}
-      ${agentChat.pending?`<div class="agent-msg me">${esc(agentChat.pending)}</div><div class="agent-msg bot"><span class="hint">正在处理，可能需要十几秒…</span></div>`:''}
+      ${agentChat.pending?`<div class="agent-msg me">${esc(agentChat.pending)}</div><div class="agent-msg bot" id="agentPending">${pendingText()}</div>`:''}
     </div>
     ${next?`<div class="btn-row agent-next"><button type="button" class="btn btn-primary" id="agentNext">下一步：${esc(done.next_step)} →</button></div>`:''}
     <form id="agentForm">

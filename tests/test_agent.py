@@ -246,3 +246,17 @@ def test_attachments_and_spreadsheets_reach_the_model(client):
     case=client.post('/api/import',files={'file':('m.eml',msg.as_bytes())}).json()
     units=[u for f in client.get(f"/api/cases/{case['id']}/materials").json()['files'] for u in f['units']]
     assert any(u['file']=='m.eml > list.xlsx' and u['text']=='MS-1\t5' for u in units)
+
+def test_progress_shows_the_steps_of_a_running_turn_and_clears_after():
+    seen=[]
+    async def go():
+        class Box:
+            def case(self):return {'id':'c','title':'t','revision':1,'rows':[],'prices':[],'warnings':[],'events':[]}
+        script=Script([call('search_rules',query='价格')],'好')
+        await agent.run_turn(Box(),'问',[],script,on_step=seen.append)
+    agent.asyncio.run(go())
+    assert seen==['search_rules']
+
+def test_progress_route_is_empty_when_nothing_runs(client):
+    case=open_case(client)
+    assert client.get(f"/api/cases/{case['id']}/agent/progress").json()=={'steps':None}

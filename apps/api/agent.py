@@ -219,7 +219,7 @@ class ModelSession:
                 if ledger:ledger.finish(rid,status,raw,**meta)
             await asyncio.sleep(1.5)
 
-async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None):
+async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_step=lambda name:None):
     """One turn. ws holds the only operations that can change the case: storing candidates and appending the person's own mail."""
     if not isinstance(message,str) or not message.strip():raise ValueError('请输入内容')
     if len(message)>MAX_MESSAGE:raise ValueError('内容过长，请分段发送')
@@ -266,6 +266,7 @@ async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None):
                     if tool_calls>LIMITS['tools']:raise ValueError('本轮操作次数已达上限')
                     args=json.loads(call['function'].get('arguments') or '{}')
                     if not isinstance(args,dict):raise ValueError('参数无效')
+                    on_step(name)
                     result=await execute(name,args)
                     if name not in used:used.append(name)
                 except (ValueError,TypeError,json.JSONDecodeError) as e:result={'error':str(e)}

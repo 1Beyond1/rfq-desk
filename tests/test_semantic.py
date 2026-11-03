@@ -234,3 +234,9 @@ def test_unit_right_after_the_quantity_is_filled_in():
         assert semantic.validate_payload(e,m)[0]['fields']['unit']==unit
     (e,_),_m=_resolve('P/N MR-5 qty 8 NE',{'part':('MR-5',1),'quantity':('8',1)})
     assert 'unit' not in e['candidates'][0]['fields']
+
+def test_a_quantity_is_not_found_inside_a_part_number():
+    text='P/N 4417/25.6 x 4 pcs (NE), and P/N 0230/07.1 - 6 pcs (SV).'
+    starts=semantic.literal_starts('quantity','6',text)
+    assert [text[a:a+5] for a in starts]==['6 pcs']
+    assert semantic.literal_starts('quantity','6','6.5 EA')==[] and semantic.literal_starts('quantity','6','A6 6 EA')==[3]

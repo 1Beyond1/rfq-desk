@@ -496,6 +496,9 @@ class CaseWorkspace:
         except HTTPException as e:raise ValueError(e.detail)
         return {'status':'已生成待审候选','rejected':result['metrics']['rejected_candidates'],'dropped_fields':result['metrics']['dropped_fields']}
 
+# What a running turn is doing, so the page can say it while the person waits. Lost on restart, which only ends the display.
+AGENT_PROGRESS={}
+
 def agent_turns(id):
     with connection() as c:return [json.loads(b) for (b,) in c.execute('SELECT body FROM agent_turns WHERE case_id=? ORDER BY seq',(id,))]
 
@@ -508,6 +511,10 @@ def agent_start(body:AgentStart,session=Depends(get_agent_session)):
     if len(text)<10:raise HTTPException(422,'内容太短，请贴完整的询价邮件')
     if len(text)>agent.MAX_MESSAGE:raise HTTPException(422,'内容过长，请分段发送')
     return import_bytes(f"邮件-{datetime.now().strftime('%m%d-%H%M%S')}.txt",text.encode())
+
+@app.get('/api/cases/{id}/agent/progress')
+def agent_progress(id:str):
+    return {'steps':AGENT_PROGRESS.get(id)}
 
 @app.get('/api/cases/{id}/agent')
 def agent_log(id:str):
@@ -523,9 +530,11 @@ async def agent_turn(id:str,body:AgentMessage,session=Depends(get_agent_session)
     # A sample's own text needs no consent, but something long typed into it may be a real mail.
     if not (body.consent or (synthetic_remote_allowed(content,ROOT) and len(body.message)<=AGENT_SHORT_QUESTION)):raise HTTPException(422,'请先同意把本工作单内容发送给模型服务')
     original=any(body.message.strip()==f.read_text(encoding='utf-8',errors='replace').strip() for f in (ROOT/'var/uploads'/id).glob('*.txt'))
-    try:result=await agent.run_turn(CaseWorkspace(id,adapter),body.message,agent_turns(id),session,can_add_mail=not original)
+    AGENT_PROGRESS[id]=[]
+    try:result=await agent.run_turn(CaseWorkspace(id,adapter),body.message,agent_turns(id),session,can_add_mail=not original,on_step=AGENT_PROGRESS[id].append)
     except ValueError as e:raise HTTPException(422,str(e))
     except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试；工作单没有变化')
+    finally:AGENT_PROGRESS.pop(id,None)
     turn={'message':body.message,'at':datetime.now().isoformat(timespec='seconds'),**result}
     with connection() as c:
         c.execute('INSERT INTO agent_turns (case_id,body) VALUES (?,?)',(id,json.dumps(turn,ensure_ascii=False)))
