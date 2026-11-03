@@ -35,9 +35,10 @@ class Extractor:
     def __init__(self,fields=None):self.fields=fields;self.calls=0
     async def extract(self,m,b):
         self.calls+=1
-        unit=m['files'][0]['units'][0]
+        fields=self.fields or {'rfq':'RFQ-77','part':'PL-9','quantity':'2','unit':'EA','condition':'NE'}
+        unit=next(u for f in m['files'] for u in f['units'] if all(v in u['text'] for v in fields.values()))
         cite=lambda v:{'value':v,'evidence':{k:unit[k] for k in ('file','sha256','location')}|{'start':unit['text'].index(v),'end':unit['text'].index(v)+len(v),'quote':v}}
-        return semantic.AdapterReply({'candidates':[{'fields':{k:cite(v) for k,v in (self.fields or {'rfq':'RFQ-77','part':'PL-9','quantity':'2','unit':'EA','condition':'NE'}).items()}}]},10,1,'real_call','test')
+        return semantic.AdapterReply({'candidates':[{'fields':{k:cite(v) for k,v in fields.items()}}]},10,1,'real_call','test')
 
 def install(script,extractor=None):
     main.app.dependency_overrides[main.get_agent_session]=lambda:script
@@ -227,3 +228,21 @@ def test_a_chinese_table_is_read_and_an_empty_file_is_refused(client):
     assert (row['rfq'],row['part'],row['description'],row['quantity'],row['unit'],row['condition'],row['requirements'])==('Q-1','ABC-1','阀门','5','EA','NE','含证书')
     r=client.post('/api/import',files={'file':('empty.txt',b'  ')})
     assert r.status_code==422 and '空' in r.json()['detail']
+
+def test_lines_already_formal_are_not_proposed_again(client):
+    table='询价号,件号,数量,单位,件状\nRFQ-77,PL-9,2,EA,NE\n'.encode()
+    case=client.post('/api/import',files={'file':('t.csv',table)}).json()
+    assert len(case['rows'])==1
+    script=Script([call('extract_candidates')],'已经是正式行。');install(script)
+    body=say(client,case).json()
+    assert '已经是正式询价行' in script.results()[0]['status'] and not body['case'].get('candidate_batches')
+
+def test_attachments_and_spreadsheets_reach_the_model(client):
+    from io import BytesIO
+    from email.message import EmailMessage
+    import openpyxl
+    book=openpyxl.Workbook();book.active.append(['P/N',"Qty Req'd"]);book.active.append(['MS-1',5]);data=BytesIO();book.save(data)
+    msg=EmailMessage();msg.set_content('见附件');msg.add_attachment(data.getvalue(),maintype='application',subtype='octet-stream',filename='list.xlsx')
+    case=client.post('/api/import',files={'file':('m.eml',msg.as_bytes())}).json()
+    units=[u for f in client.get(f"/api/cases/{case['id']}/materials").json()['files'] for u in f['units']]
+    assert any(u['file']=='m.eml > list.xlsx' and u['text']=='MS-1\t5' for u in units)

@@ -231,7 +231,8 @@ def synthetic_remote_allowed(materials,root):
                 for item in data['files']:
                     p=manifest.parent/item['file']
                     if p.parent==manifest.parent and p.is_file() and sha(p)==item['sha256']:allowed.add(item['sha256'])
-    return bool(materials['files']) and all(f['sha256'] in allowed for f in materials['files'])
+    uploaded=[f for f in materials['files'] if not f.get('container_file')]
+    return bool(uploaded) and all(f['sha256'] in allowed for f in uploaded)
 
 async def propose(case,materials,mode,adapter,remote_allowed=False):
     started=time.monotonic()

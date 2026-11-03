@@ -63,7 +63,8 @@ def test_attachment_existing_xlsx_locations_exposed_without_changing_citations(h
     assert src['file']=='backend.eml > rows.xlsx'
     m=h.get(f"/api/cases/{c['id']}/materials").json()
     file=next(f for f in m['files'] if f['file']==src['file'])
-    assert file['sha256']==src['sha256'] and file['units'][0]['location']==src['location']
+    # The header row is a unit too now; the cited row must be among them under the same name.
+    assert file['sha256']==src['sha256'] and any(u['location']==src['location'] for u in file['units'])
 
 
 def test_targeted_registration_legacy_summary_codes_and_noop(h):

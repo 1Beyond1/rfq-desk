@@ -487,6 +487,11 @@ class CaseWorkspace:
         case=self.case();content=case_materials(case)
         result=await propose(case,content,'model',self.adapter,True)
         if 'id' not in result:return {'status':'没有提取到候选','detail':result['status']}
+        # A line the table parser already made formal would only ask the person to accept it twice.
+        keys=('rfq','part','quantity','unit','condition')
+        formal={tuple(r[k] for k in keys) for r in case['rows'] if not r['excluded']}
+        result['candidates']=[c for c in result['candidates'] if tuple(c['fields'].get(k,'') for k in keys) not in formal]
+        if not result['candidates']:return {'status':'原件里的询价行已经是正式询价行，没有新的候选'}
         try:store_batch(self.id,Change(revision=case['revision'],values={}),content,result,True)
         except HTTPException as e:raise ValueError(e.detail)
         return {'status':'已生成待审候选','rejected':result['metrics']['rejected_candidates'],'dropped_fields':result['metrics']['dropped_fields']}
