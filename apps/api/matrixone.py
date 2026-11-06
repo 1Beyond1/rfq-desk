@@ -22,8 +22,8 @@ SCHEMA = [
        message TEXT, reply TEXT, tools VARCHAR(500), PRIMARY KEY (case_id, seq))""",
     """CREATE TABLE IF NOT EXISTS rfq_snapshots (name VARCHAR(100) PRIMARY KEY, case_id VARCHAR(32), case_revision INT,
        price_version INT, actor VARCHAR(200), at VARCHAR(40))""",
-    """CREATE TABLE IF NOT EXISTS rfq_branches (name VARCHAR(100) PRIMARY KEY, case_id VARCHAR(32), batch_id VARCHAR(32),
-       candidates INT, at VARCHAR(40))""",
+    """CREATE TABLE IF NOT EXISTS rfq_candidate_branches (name VARCHAR(100) PRIMARY KEY, case_id VARCHAR(32), batch_id VARCHAR(32),
+       candidates INT, at VARCHAR(40), diff JSON)""",
 ]
 status = {'enabled': False, 'connected': False, 'error': None}
 
@@ -108,7 +108,10 @@ def branch_candidates(case, batch):
             cur.execute(f'DATA BRANCH CREATE TABLE {db}.{name} FROM {db}.rfq_lines')
             for x in batch['candidates']:
                 cur.execute(INSERT_LINE.replace('rfq_lines', name, 1), line_values(case['id'], case['revision'], {'id': 'cand:' + x['id'], **x['fields']}))
-            cur.execute('INSERT INTO rfq_branches VALUES (%s,%s,%s,%s,%s)', (name, case['id'], batch['id'], len(batch['candidates']), now()))
+            # Taken now, against the lines as they were when the model proposed: later acceptances must not rewrite it.
+            cur.execute(f'DATA BRANCH DIFF {name} AGAINST rfq_lines')
+            diff = [{'flag': r[1], 'row_id': r[3], 'rfq': r[6], 'part': r[7], 'quantity': r[9], 'unit': r[10]} for r in cur.fetchall() if r[0] == name and r[2] == case['id']]
+            cur.execute('INSERT INTO rfq_candidate_branches VALUES (%s,%s,%s,%s,%s,%s)', (name, case['id'], batch['id'], len(batch['candidates']), now(), json.dumps(diff, ensure_ascii=False)))
         return name
     return guarded(run)
 
@@ -154,13 +157,9 @@ def report(case_id):
                 since = {'snapshot': last, 'changes': compare(rows_at(cur, case_id, last), rows_at(cur, case_id))}
                 cur.execute(f"SELECT COUNT(*) FROM rfq_agent_memory {{SNAPSHOT='{last}'}} WHERE case_id=%s", (case_id,))
                 since['memory_at_approval'] = cur.fetchone()[0]
-            cur.execute('SELECT name,batch_id,candidates,at FROM rfq_branches WHERE case_id=%s ORDER BY at', (case_id,))
-            branches = []
-            for name, batch_id, n, at in cur.fetchall():
-                cur.execute(f'DATA BRANCH DIFF {name} AGAINST rfq_lines')
-                diff = [r for r in cur.fetchall() if r[2] == case_id]
-                branches.append({'name': name, 'batch_id': batch_id, 'candidates': n, 'at': at,
-                                 'diff': [{'flag': r[1], 'row_id': r[3], 'rfq': r[6], 'part': r[7], 'quantity': r[9], 'unit': r[10]} for r in diff][:30]})
+            cur.execute('SELECT name,batch_id,candidates,at,diff FROM rfq_candidate_branches WHERE case_id=%s ORDER BY at', (case_id,))
+            branches = [{'name': name, 'batch_id': batch_id, 'candidates': n, 'at': at, 'diff': (json.loads(diff) if isinstance(diff, str) else diff or [])[:30]}
+                        for name, batch_id, n, at, diff in cur.fetchall()]
             cur.execute('SELECT seq,at,action FROM rfq_audit WHERE case_id=%s ORDER BY seq DESC LIMIT 12', (case_id,))
             audit = [dict(zip(('seq', 'at', 'action'), r)) for r in cur.fetchall()]
             cur.execute('SELECT COUNT(*) FROM rfq_audit WHERE case_id=%s', (case_id,)); audit_total = cur.fetchone()[0]

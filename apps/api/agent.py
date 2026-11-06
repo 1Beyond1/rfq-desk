@@ -8,6 +8,7 @@ import httpx
 from . import clarifications
 from .domain import FIELDS, analyze, number
 from .materials import read_materials
+from .model_router import ROUTER
 from .model_usage import UsageLedger, usage_account
 
 MAX_MESSAGE=12000
@@ -190,35 +191,44 @@ def candidate_summary(case):
              'price':check_prices(case,c['fields'].get('part',''),c['fields'].get('unit',''),c['fields'].get('condition',''),c['fields'].get('quantity',''))} for _,c in pending_candidates(case)][:30]
 
 class ModelSession:
-    """One chat completion at a time. Every attempt goes through the usage ledger; unknown usage is never counted as zero."""
-    def __init__(self,settings,transport=None):self.settings=settings;self.transport=transport;self.tokens=0;self.requests=0
+    """One chat completion at a time, from whichever service the router ranks first; a slow or failing one hands over to the next.
+    Every attempt goes through the usage ledger; unknown usage is never counted as zero."""
+    def __init__(self,routes,transport=None):
+        self.routes=routes if isinstance(routes,list) else [routes];self.transport=transport;self.tokens=0;self.requests=0;self.models=[];self.switches=0
     async def call(self,messages,final,deadline):
         ledger=UsageLedger() if self.transport is None else None
-        body={'model':self.settings.model,'messages':messages,'tools':TOOLS,'temperature':0,'max_tokens':LIMITS['output_tokens'],**({'tool_choice':'none'} if final else {})}
-        for attempt in (1,2):
+        order=ROUTER.order(self.routes);failure='模型服务暂时不可用'
+        # With a single service, a busy answer is retried once on it.
+        if len(order)==1:order=order*2
+        for n,s in enumerate(order):
             left=deadline-time.monotonic()
             if left<=1:raise ModelUnavailable('模型响应超时')
-            try:rid=ledger.reserve({'agent':len(messages)},self.settings.model,LIMITS['output_tokens']*3) if ledger else None
+            body={'model':s.model,'messages':messages,'tools':TOOLS,'temperature':0,'max_tokens':LIMITS['output_tokens'],**({'tool_choice':'none'} if final else {})}
+            try:rid=ledger.reserve({'agent':len(messages)},s.model,LIMITS['output_tokens']*3) if ledger else None
             except ValueError as e:raise ModelUnavailable(str(e))
-            raw=None;status='transport_failed';meta={}
+            raw=None;status='transport_failed';meta={};started=time.monotonic()
             try:
-                async with httpx.AsyncClient(transport=self.transport,timeout=left,trust_env=False,follow_redirects=False) as client:
-                    response=await client.post(self.settings.endpoint,headers={'Authorization':'Bearer '+self.settings.key},json=body)
+                async with httpx.AsyncClient(transport=self.transport,timeout=ROUTER.budget(left,len(order)-n-1),trust_env=False,follow_redirects=False) as client:
+                    response=await client.post(s.endpoint,headers={'Authorization':'Bearer '+s.key},json=body)
                 meta['http_status']=response.status_code;self.requests+=1
                 if response.status_code==429 or response.status_code>=500:raise httpx.TransportError('busy')
                 response.raise_for_status()
                 data=response.json();raw=data.get('usage') if isinstance(data.get('usage'),dict) else None
-                self.tokens+=usage_account(raw) or 0
-                status='agent_response'
                 message=data['choices'][0]['message']
+                status='agent_response'
+                self.tokens+=usage_account(raw) or 0
+                ROUTER.record(s,time.monotonic()-started)
+                if s.model not in self.models:self.models.append(s.model)
                 return {'role':'assistant','content':message.get('content') or '',**({'tool_calls':message['tool_calls']} if message.get('tool_calls') else {})}
-            except httpx.TransportError:
-                if attempt==2 or time.monotonic()+1.5>=deadline:raise ModelUnavailable('模型服务暂时不可用')
-            except (httpx.HTTPError,KeyError,IndexError,TypeError,ValueError):
-                status='response_invalid';raise ModelUnavailable('模型服务返回了无法使用的结果')
+            except httpx.TransportError:failure='模型服务暂时不可用'
+            except (httpx.HTTPError,KeyError,IndexError,TypeError,ValueError):status='response_invalid';failure='模型服务返回了无法使用的结果'
             finally:
                 if ledger:ledger.finish(rid,status,raw,**meta)
-            await asyncio.sleep(1.5)
+            ROUTER.record(s,failed=True)
+            if n+1<len(order):
+                if order[n+1] is s:await asyncio.sleep(1.5)
+                else:self.switches+=1
+        raise ModelUnavailable(failure)
 
 async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_step=lambda name:None):
     """One turn. ws holds the only operations that can change the case: storing candidates and appending the person's own mail."""
@@ -254,7 +264,7 @@ async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_
     def finish(reply,degraded=False):
         # The page shows a draft only when one exists, so the reply must not claim one that does not.
         if not draft and DRAFT_CLAIM.search(reply):reply=reply.rstrip()+'\n（更正：本轮没有生成澄清邮件。）'
-        return {'reply':reply,'draft':draft,'tools':used,'degraded':degraded,'next_step':next_step(ws.case()),'tokens':session.tokens,'requests':session.requests}
+        return {'reply':reply,'draft':draft,'tools':used,'degraded':degraded,'next_step':next_step(ws.case()),'tokens':session.tokens,'requests':session.requests,'models':getattr(session,'models',[]),'switches':getattr(session,'switches',0)}
     try:
         for round_ in range(LIMITS['calls']):
             answer=await session.call(messages,round_==LIMITS['calls']-1,deadline)

@@ -437,7 +437,7 @@ function viewApprove(){
     if(priceDrafts.has(current.id))throw Error('价格依据总表有待保存修改，请先保存或放弃再批准');
     const actor=$('actor').value;if(!actor.trim()){$('actor').focus();throw Error('请填写批准人')}
     const done=busyButton($('approve'),'批准中…');
-    try{if(await change('approve',{actor},'当前版本已批准；之后变更相关输入或价格需重新批准。'))setFocus('output','o')}finally{done()}
+    try{if(await change('approve',{actor},'当前版本已批准；之后变更相关输入或价格需重新批准。')){setFocus('output','o');announceSnapshot(current.id)}}finally{done()}
   });
 }
 const quoteSnapshots=new Map();
@@ -468,7 +468,7 @@ function viewOutput(){
 /* ---------- log ---------- */
 const eventNames={import:'导入原件',material_append:'追加原件',parse_review:'解析警告核查',resolve:'行裁定',price_update:'价表新版本',price_import_review:'价目原件审阅',approve:'批准',export:'正式输出',candidate_accept:'接纳候选',candidate_partial_accept:'局部接纳候选',candidate_reject:'拒绝候选',clarification_register:'登记澄清',clarification_receive:'登记答复',clarification_apply:'答复回填',clarification_resolve:'澄清解决',clarification_superseded:'澄清旧目标结束'};
 function eventSummary(e){const d=e.detail||{};if(e.action==='approve')return `批准人 ${d.actor} · 工作版本 ${d.revision}`;if(e.action==='export')return `${d.format} · 工作版本 ${d.revision}`;if(e.action==='price_update')return `价表 v${d.version} · 影响 ${(d.affected||[]).length} 行`;return Object.keys(d).slice(0,4).join(' · ')||'详情'}
-const actionNames={import:'导入原件',resolve:'人工裁定',approve:'批准',price_update:'价表更新',candidate_propose:'模型提出候选',candidate_accept:'接纳候选',candidate_reject:'拒绝候选',material_append:'追加原件',clarification_register:'登记澄清',clarification_receive:'收到答复',clarification_resolve:'澄清关闭',review:'核查解析警告'};
+const actionNames={import:'导入原件',resolve:'人工裁定',approve:'批准',export:'正式输出',price_update:'价表更新',price_import_review:'审阅价目原件',candidate_propose:'模型提出候选',candidate_accept:'接纳候选',candidate_partial_accept:'局部接纳候选',candidate_reject:'拒绝候选',material_append:'追加原件',clarification_register:'登记澄清',clarification_receive:'收到答复',clarification_apply:'回填答复',clarification_resolve:'澄清关闭',clarification_superseded:'澄清随归属结束',parse_review:'核查解析警告'};
 async function loadMatrixOne(caseId){
   const box=$('moPanel');if(!box)return;
   let r;try{r=await request(`/cases/${caseId}/matrixone`)}catch(e){box.innerHTML=`<p class="hint">${esc(e.message)}</p>`;return}
@@ -480,7 +480,7 @@ async function loadMatrixOne(caseId){
   box.innerHTML=`<p class="hint">数据库 ${esc(r.database)}。每次批准对整个库打一个快照；模型候选写在数据分支上，和正式询价行做差异对比。</p>
   <h4>批准快照（${r.snapshots.length}）</h4>${r.snapshots.length?`<ul>${r.snapshots.map(s=>`<li class="mono">${esc(s.name)} · 工作版本 ${s.case_revision} · 价表 v${s.price_version} · ${esc(s.actor)} · ${esc(s.at)}</li>`).join('')}</ul>`:'<p class="hint">还没有批准过。</p>'}
   ${since?`<h4>上次批准之后的改动</h4>${since.changes.length?`<ul>${since.changes.map(change).join('')}</ul>`:'<p class="hint">没有改动，和批准时一致。</p>'}<p class="hint">批准时这张工作单的 Agent 对话有 ${since.memory_at_approval} 轮（按快照回看）。</p>`:''}
-  <h4>候选分支（${r.branches.length}）</h4>${r.branches.length?r.branches.map(b=>`<p class="mono">${esc(b.name)} · ${b.candidates} 条候选</p><ul>${b.diff.map(d=>`<li>${esc({INSERT:'新增',UPDATE:'修改',DELETE:'删除'}[d.flag]||d.flag)} ${esc(d.rfq||'')} / ${esc(d.part||'')} · ${esc(d.quantity||'')} ${esc(d.unit||'')}</li>`).join('')||'<li>相对正式行没有差异</li>'}</ul>`).join(''):'<p class="hint">还没有模型候选。</p>'}
+  <h4>候选分支（${r.branches.length}）· 提取当时相对正式询价行的差异</h4>${r.branches.length?r.branches.map(b=>`<p class="mono">${esc(b.name)} · ${b.candidates} 条候选</p><ul>${b.diff.map(d=>`<li>${esc({INSERT:'新增',UPDATE:'修改',DELETE:'删除'}[d.flag]||d.flag)} ${esc(d.rfq||'')} / ${esc(d.part||'')} · ${esc(d.quantity||'')} ${esc(d.unit||'')}</li>`).join('')||'<li>相对正式行没有差异</li>'}</ul>`).join(''):'<p class="hint">还没有模型候选。</p>'}
   <h4>决策审计（共 ${r.audit_total} 条，Agent 对话 ${r.agent_memory} 轮）</h4><ul>${r.audit.map(a=>`<li><span class="mono hint">${esc(a.at)}</span> ${esc(actionNames[a.action]||a.action)}</li>`).join('')}</ul>`;
 }
 function viewLog(){
@@ -526,6 +526,7 @@ views.agent=function(){
   if(agentChat.caseId!==current.id)agentLoad();
   const turn=t=>`<div class="agent-msg me">${esc(t.message)}</div><div class="agent-msg bot"><div class="agent-text">${esc(t.reply)}</div>
     ${t.tools?.length?`<p class="hint">做了：${t.tools.map(n=>esc(agentToolNames[n]||n)).join('、')}</p>`:''}
+    ${t.models?.length?`<p class="hint">回答模型：${t.models.map(esc).join('、')}${t.switches?'（有一个服务慢或出错，已自动切换）':''}</p>`:''}
     ${t.draft?`<details class="agent-draft" open><summary>可发给对方的澄清邮件（未发送）</summary><pre>${esc(t.draft)}</pre><button type="button" class="btn btn-sm" data-agent-copy>复制</button></details>`:''}</div>`;
   const done=agentChat.turns.at(-1),next=!agentChat.busy&&done?firstFocus():null;
   W().innerHTML=head('询价 Agent','这张工作单的助手',{sub:'它能提取候选、查价、解释依据、起草澄清邮件。接纳候选、改字段、录价、批准和发送都由你来做。'})+`
@@ -567,3 +568,48 @@ document.querySelectorAll('[data-agent-sample]').forEach(b=>b.onclick=()=>run(as
   const c=await request('/semantic-demo/'+b.dataset.agentSample,{method:'POST'});
   await agentOpen(c,'这是一封合成询价邮件，已存为本工作单原件。请处理它。',false);
 }));
+
+
+/* ---------- 3 分钟体验 ---------- */
+// The step comes from the work order's real state, so a reload or a detour never leaves the guide out of date.
+const tour={caseId:null};
+try{tour.caseId=sessionStorage.getItem('rfq-tour')}catch{}
+function tourSave(){try{tour.caseId?sessionStorage.setItem('rfq-tour',tour.caseId):sessionStorage.removeItem('rfq-tour')}catch{}}
+function tourStep(c){
+  const p=c.progress,active=c.rows.filter(r=>!r.excluded);
+  if(!active.length&&!p.pending_candidates)return {n:1,title:'让 Agent 处理这封邮件',why:'在询价 Agent 里发送消息，它会提取询价行、查价，缺信息时起草澄清邮件。',label:'打开询价 Agent',go:()=>setFocus('agent')};
+  if(p.pending_candidates){const b=(c.candidate_batches||[]).find(b=>b.expected_revision===c.revision&&b.candidates.some(x=>x.status==='pending')),x=b?.candidates.find(x=>x.status==='pending');
+    return {n:2,title:`审阅 ${p.pending_candidates} 条候选`,why:'右侧是原件，每个值都标了出处。核对后点“接纳本批所有无争议候选”，它们才成为正式询价行。',label:'去审阅',go:()=>x&&setFocus('cand',b.id+':'+x.id)}}
+  if(p.pending_parse_review)return {n:3,title:'确认原件没有遗漏',why:'规则没能直接读出的原件，要由人确认没有漏行。在“人工核查结论”里写一句并记录。',label:'去确认',go:()=>setFocus('warnings','w')};
+  const unpriced=active.find(r=>!r.price);
+  if(unpriced)return {n:3,title:'补上价格依据',why:'没有唯一有效的价格就不能报价。演示里点“加载合成演示价表”即可。',label:'去核价',go:()=>setFocus('price',unpriced.id)};
+  if(!active.every(r=>r.approved))return {n:3,title:'批准当前版本',why:'批准时这一版会存成 MatrixOne 快照，之后任何改动都会让批准失效并能比对出来。',label:'去批准',go:()=>setFocus('approve','a')};
+  return {n:4,title:'体验完成',why:'可以看报价单，也可以看版本快照和审计，或者问 Agent“批准后改过什么”。',label:'看版本与审计',go:()=>setFocus('log')};
+}
+function renderTourBar(){
+  const w=W();if(!w||!current||tour.caseId!==current.id)return;
+  const s=tourStep(current),bar=document.createElement('div');bar.className='tour-bar';
+  bar.innerHTML=`<div class="tour-steps">${['Agent 处理','审阅候选','放行报价'].map((t,i)=>`<span class="${i+1<s.n?'done':i+1===s.n?'on':''}">${i+1<s.n?'✓':i+1} ${t}</span>`).join('')}</div>
+    <div class="tour-now"><b>${s.n<4?`第 ${s.n} 步：`:''}${esc(s.title)}</b><span>${esc(s.why)}</span></div>
+    <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-tour-go>${esc(s.label)} →</button>${s.n===4?'<button type="button" class="btn btn-sm" data-tour-out>看报价单</button>':''}<button type="button" class="text-btn" data-tour-end>结束体验</button></div>`;
+  w.prepend(bar);
+  bar.querySelector('[data-tour-go]').onclick=()=>s.go();
+  bar.querySelector('[data-tour-out]')?.addEventListener('click',()=>setFocus('output','o'));
+  bar.querySelector('[data-tour-end]').onclick=()=>{tour.caseId=null;tourSave();bar.remove()};
+  // Names are filled in for the visitor; ticking "checked" stays theirs.
+  for(const [sel,v] of [['[data-keep="actor"]','评委体验'],['[data-keep="reason"]','已对照原文核对'],['[data-keep="note"]','已对照右侧原件，询价行都已提取，没有遗漏'],['#actor','评委体验']]){const el=w.querySelector(sel);if(el&&!el.value)el.value=v}
+}
+// MatrixOne shows up where the visitor already is: on approval, and next to the candidates under review.
+async function announceSnapshot(caseId){try{const r=await request(`/cases/${caseId}/matrixone`);const s=r.connected&&r.snapshots?.at(-1);if(s&&current?.id===caseId)notice(`已批准。这一版已存为 MatrixOne 快照 ${s.name}，之后任何改动都能和它比对。`,'ok')}catch{}}
+async function noteBranch(caseId,batchId){
+  try{const r=await request(`/cases/${caseId}/matrixone`);const b=r.connected&&r.branches?.find(b=>b.batch_id===batchId);const head=W().querySelector('.w-head');
+    if(!b||!head||current?.id!==caseId||focus?.type!=='cand'||W().querySelector('.mo-branch'))return;
+    const p=document.createElement('p');p.className='hint mo-branch';p.textContent=`这批候选写在 MatrixOne 数据分支 ${b.name} 上：相对提取时的正式询价行，新增 ${b.diff.filter(d=>d.flag==='INSERT').length} 行、修改 ${b.diff.filter(d=>d.flag==='UPDATE').length} 行。接纳之前，正式数据不变。`;head.after(p)}catch{}
+}
+const renderWorkPlain=renderWork;
+renderWork=function(){renderWorkPlain();renderTourBar();if(focus?.type==='cand'&&current)noteBranch(current.id,focus.id.split(':')[0])};
+$('tourStart').onclick=()=>run(async()=>{
+  const c=await request('/semantic-demo/mail-en',{method:'POST'});
+  tour.caseId=c.id;tourSave();
+  await agentOpen(c,'这是一封合成询价邮件，已存为本工作单原件。请处理它。',false);
+});

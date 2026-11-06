@@ -212,13 +212,31 @@ class HTTPExtractionAdapter:
         finally:
             if ledger:ledger.finish(rid,status,raw,**metadata)
 
+class RoutedAdapter(HTTPExtractionAdapter):
+    """Extraction from whichever service the router ranks first; a slow or failing one hands over to the next."""
+    def __init__(self,routes,transport=None):super().__init__(routes[0],transport);self.routes=routes
+    async def extract(self,materials,budget):
+        from .model_router import ROUTER
+        order=ROUTER.order(self.routes);started=time.monotonic();error=None
+        for n,s in enumerate(order):
+            left=budget['max_seconds']-(time.monotonic()-started)
+            if left<=1:break
+            tried=time.monotonic()
+            try:
+                reply=await HTTPExtractionAdapter(s,self.transport).extract(materials,{**budget,'max_seconds':ROUTER.budget(left,len(order)-n-1)})
+                ROUTER.record(s,time.monotonic()-tried);return reply
+            except (httpx.HTTPError,ValueError,KeyError,TypeError) as e:
+                ROUTER.record(s,failed=True);error=e
+        raise error or httpx.TimeoutException('所有模型服务都超时')
+
 def get_adapter():
     settings=ModelSettings.from_env()
     # A future service must be explicitly enabled; configuration alone is insufficient.
     if not settings.configured:return UnconfiguredAdapter()
     if not settings.enabled:
         adapter=UnconfiguredAdapter();adapter.status='disabled';return adapter
-    return HTTPExtractionAdapter(settings)
+    routes=ModelSettings.routes()
+    return RoutedAdapter(routes) if len(routes)>1 else HTTPExtractionAdapter(settings)
 
 def synthetic_remote_allowed(materials,root):
     sha=lambda p:__import__('hashlib').sha256(p.read_bytes()).hexdigest()

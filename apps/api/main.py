@@ -16,6 +16,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from .parsing import parse_file
 from . import price_intake, clarifications, agent, matrixone
+from .model_router import ROUTER
 from .quote_html import render_quote
 from .materials import read_materials
 from .semantic import get_adapter, propose, accept_candidate, synthetic_remote_allowed
@@ -83,7 +84,7 @@ def health():
     from .model_usage import UsageLedger
     s=ModelSettings.from_env();enabled=s.configured and s.enabled
     calls=UsageLedger().summary()['calls'] if enabled else []
-    return {'mode':'model-live-local' if enabled else 'offline-local','model_configured':s.configured,'requests_enabled':enabled,'model_name':s.model if enabled else None,'model_connected':any(c.get('http_status')==200 for c in calls),'connection_scope':'historical HTTP success in this run; not a current probe','platform_connected':bool(matrixone.status['connected']),'matrixone':{k:matrixone.status[k] for k in ('enabled','connected')},'request_count':len(calls)}
+    return {'mode':'model-live-local' if enabled else 'offline-local','model_configured':s.configured,'requests_enabled':enabled,'model_name':s.model if enabled else None,'model_connected':any(c.get('http_status')==200 for c in calls),'connection_scope':'historical HTTP success in this run; not a current probe','platform_connected':bool(matrixone.status['connected']),'model_routes':ROUTER.snapshot(ModelSettings.routes()) if enabled else [],'matrixone':{k:matrixone.status[k] for k in ('enabled','connected')},'request_count':len(calls)}
 
 @app.get('/api/cases')
 def cases():
@@ -468,7 +469,7 @@ class AgentMessage(BaseModel):
 def get_agent_session():
     from .model_config import ModelSettings
     s=ModelSettings.from_env()
-    return agent.ModelSession(s) if s.configured and s.enabled else None
+    return agent.ModelSession(ModelSettings.routes()) if s.configured and s.enabled else None
 
 def official_material(content):
     """Official samples stay on this machine; consent does not change that."""

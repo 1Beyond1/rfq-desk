@@ -268,3 +268,41 @@ def test_a_chinese_header_table_can_be_approved(client):
     case=client.post(f"/api/cases/{case['id']}/prices",json={'revision':case['revision'],'values':{'prices':[price]}}).json()
     r=client.post(f"/api/cases/{case['id']}/approve",json={'revision':case['revision'],'values':{'actor':'张工'}})
     assert r.status_code==200,r.text
+
+def two_services():
+    return [ModelSettings('https://a.invalid/v1/chat/completions','k1','model-a'),ModelSettings('https://b.invalid/v1/chat/completions','k2','model-b')]
+
+def test_a_busy_service_hands_over_and_the_router_remembers(monkeypatch):
+    from apps.api import model_router
+    monkeypatch.setattr(model_router,'ROUTER',model_router.Router());monkeypatch.setattr(agent,'ROUTER',model_router.ROUTER)
+    hits=[]
+    def handler(request):
+        hits.append(request.url.host)
+        if request.url.host=='a.invalid':return httpx.Response(429,json={})
+        return httpx.Response(200,json={'choices':[{'message':{'content':'好'}}],'usage':{'total_tokens':5}})
+    async def go():
+        import time
+        s=agent.ModelSession(two_services(),transport=httpx.MockTransport(handler))
+        first=await s.call([],False,time.monotonic()+30)
+        second=await s.call([],False,time.monotonic()+30)
+        return first,second,s
+    first,second,s=agent.asyncio.run(go())
+    assert first['content']=='好' and hits==['a.invalid','b.invalid','b.invalid'] and s.models==['model-b'] and s.switches==1
+
+def test_all_services_failing_is_one_clear_error(monkeypatch):
+    from apps.api import model_router
+    monkeypatch.setattr(agent,'ROUTER',model_router.Router())
+    async def go():
+        import time
+        s=agent.ModelSession(two_services(),transport=httpx.MockTransport(lambda r:httpx.Response(503,json={})))
+        await s.call([],False,time.monotonic()+30)
+    with pytest.raises(agent.ModelUnavailable):agent.asyncio.run(go())
+
+def test_router_puts_a_recent_failure_last_and_prefers_the_faster():
+    from apps.api.model_router import Router
+    r=Router();a,b=two_services()
+    assert r.order([a,b])==[a,b]
+    r.record(a,10.0);r.record(b,3.0)
+    assert r.order([a,b])==[b,a]
+    r.record(b,failed=True)
+    assert r.order([a,b])==[a,b]
