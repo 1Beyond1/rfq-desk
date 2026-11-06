@@ -364,12 +364,16 @@ function viewClarifications(){
 function viewCandidate(){
   const [bid,cid]=focus.id.split(':'),b=(current.candidate_batches||[]).find(b=>b.id===bid),c=b?.candidates.find(x=>x.id===cid);if(!c)return viewMissing();
   const fresh=b.expected_revision===current.revision&&c.status==='pending';
-  const mode=kept.get(keepKey('mode'))||'full',target=kept.get(keepKey('target'))??'',base=current.rows.find(r=>r.id===target),partial=mode==='partial';
-  const fields=Object.entries(fieldNames).map(([f,l])=>{const op=kept.get(keepKey('op:'+f))||'inherit',enabled=!partial||op==='update',src=c.field_sources[f];return `<div class="cf"><label>${l}${partial?`<select data-keep="op:${f}" data-op="${f}" ${['rfq','part'].includes(f)?'disabled':''}><option value="inherit">继承基础值</option>${f in c.fields&&!['rfq','part'].includes(f)?'<option value="update">更新本次值</option>':''}${!['rfq','part'].includes(f)?'<option value="clear">明确清空</option>':''}</select>`:''}<input data-keep="f:${f}" data-field="${f}" value="${esc(c.fields[f]||'')}" class="mono" ${enabled?'':'disabled'}></label>${partial?`<small>基础「<span class="mono">${esc(base?.[f]??'请选择目标行')}</span>」</small>`:''}<small>${src?`<button type="button" class="src-link" data-srcfield="${f}">${esc(src.file)} · ${esc(src.location)}</button>「<span class="mono">${esc(src.quote)}</span>」`:'没有本次引用'}</small></div>`}).join('');
+  // A candidate whose RFQ and part match exactly one formal row most likely revises it; start there and leave the check to the reviewer.
+  const same=current.rows.filter(r=>!r.excluded&&c.fields.rfq&&r.rfq===c.fields.rfq&&r.part===c.fields.part),guess=same.length===1?same[0]:null;
+  const mode=kept.get(keepKey('mode'))||(guess?'partial':'full'),target=kept.get(keepKey('target'))??(guess&&mode==='partial'?guess.id:''),base=current.rows.find(r=>r.id===target),partial=mode==='partial';
+  const guessed=!!guess&&target===guess.id&&!kept.has(keepKey('target'));
+  const fields=Object.entries(fieldNames).map(([f,l])=>{const op=kept.get(keepKey('op:'+f))||(guessed&&f in c.fields&&!['rfq','part'].includes(f)&&c.fields[f]!==String(base[f]??'')?'update':'inherit'),enabled=!partial||op==='update',src=c.field_sources[f];return `<div class="cf"><label>${l}${partial?`<select data-keep="op:${f}" data-op="${f}" ${['rfq','part'].includes(f)?'disabled':''}><option value="inherit">继承基础值</option>${f in c.fields&&!['rfq','part'].includes(f)?`<option value="update" ${op==='update'?'selected':''}>更新本次值</option>`:''}${!['rfq','part'].includes(f)?'<option value="clear">明确清空</option>':''}</select>`:''}<input data-keep="f:${f}" data-field="${f}" value="${esc(c.fields[f]||'')}" class="mono" ${enabled?'':'disabled'}></label>${partial?`<small>基础「<span class="mono">${esc(base?.[f]??'请选择目标行')}</span>」</small>`:''}<small>${src?`<button type="button" class="src-link" data-srcfield="${f}">${esc(src.file)} · ${esc(src.location)}</button>「<span class="mono">${esc(src.quote)}</span>」`:'没有本次引用'}</small></div>`}).join('');
   W().innerHTML=head('修订候选 · '+esc(engineName(b.engine)),label({rfq:c.fields.rfq,part:c.fields.part}),{mono:true,sub:`这是模型提出的候选，还不是正式询价。请核对每个值，以及它属于哪一张询价。`,chip:`<span class="chip ${fresh?'tone-price':'tone-off'}">${fresh?'待审阅':c.status!=='pending'?({accepted:'已接纳',rejected:'已拒绝'}[c.status]||c.status):'旧批次，须重新生成'}</span>`})+
   `<div class="w-body">${fresh?'':'<p class="note bad">此候选不能再接纳：已处理或工作版本已变化，请重新生成候选。</p>'}
   <fieldset class="card" ${fresh?'':'disabled'}>
-    <div class="fields two"><label>操作<select data-keep="mode" id="candMode"><option value="full">新建一行或整行替换</option><option value="partial">局部修订（逐字段选择）</option></select></label><label>目标正式行<select data-keep="target" id="candTarget"><option value="">新增正式行</option>${current.rows.map(r=>`<option value="${r.id}">${esc(r.rfq)} / ${esc(r.part)} / 数量 ${esc(r.quantity)} / 行版本 ${r.revision}</option>`).join('')}</select></label></div>
+    <div class="fields two"><label>操作<select data-keep="mode" id="candMode"><option value="full">新建一行或整行替换</option><option value="partial" ${partial?'selected':''}>局部修订（逐字段选择）</option></select></label><label>目标正式行<select data-keep="target" id="candTarget"><option value="">新增正式行</option>${current.rows.map(r=>`<option value="${r.id}" ${r.id===target?'selected':''}>${esc(r.rfq)} / ${esc(r.part)} / 数量 ${esc(r.quantity)} / 行版本 ${r.revision}</option>`).join('')}</select></label></div>
+    ${guessed?`<p class="note">询价号和件号对上了正式行 ${esc(guess.rfq)} / ${esc(guess.part)}，已默认作为它的局部修订，只更新本次邮件写到的字段。请核对。</p>`:''}
     <p class="hint">${partial?'未选字段继承所选基础行及其原出处。更新须有本次引用；清空须单独理由。询价号与件号必须一致。':'整行替换时，候选里没有的字段会留空。'}</p>
     <div class="cfields">${fields}</div>
     <div class="fields two"><label>明确清空理由（仅清空时必填）<input data-keep="clear"></label><label>核对人<input data-keep="actor"></label><label class="span2">裁定理由<textarea data-keep="reason" rows="2"></textarea></label></div>
@@ -572,10 +576,22 @@ document.querySelectorAll('[data-agent-sample]').forEach(b=>b.onclick=()=>run(as
 
 /* ---------- 3 分钟体验 ---------- */
 // The step comes from the work order's real state, so a reload or a detour never leaves the guide out of date.
-const tour={caseId:null};
-try{tour.caseId=sessionStorage.getItem('rfq-tour')}catch{}
-function tourSave(){try{tour.caseId?sessionStorage.setItem('rfq-tour',tour.caseId):sessionStorage.removeItem('rfq-tour')}catch{}}
+const tour={caseId:null,revised:null};
+try{tour.caseId=sessionStorage.getItem('rfq-tour');tour.revised=sessionStorage.getItem('rfq-tour-revised')}catch{}
+function tourSave(){try{for(const [k,v] of [['rfq-tour',tour.caseId],['rfq-tour-revised',tour.revised]])v?sessionStorage.setItem(k,v):sessionStorage.removeItem(k)}catch{}}
+// Step 4 is the customer's revision: the approved quote goes stale and MatrixOne shows what changed against the snapshot.
+const TOUR_REVISION='客户补充（RFQ-5521）：P/N 77-2288 seal kit 数量改为 8 EA，件状仍为 NE，其余不变。请把这封补充邮件加到工作单并更新候选。';
+function tourFillRevision(c){tour.revised=c.id+':'+c.revision;tourSave();setFocus('agent');agentChat.text=TOUR_REVISION;agentChat.consent=true;const i=$('agentInput');if(i){i.value=TOUR_REVISION;$('agentConsent').checked=true;i.focus()}}
+function tourRevision(c){
+  const p=c.progress,active=c.rows.filter(r=>!r.excluded);
+  if(c.revision===Number(tour.revised.split(':')[1])&&!p.pending_candidates)return {n:4,title:'把修订发给 Agent',why:'修订邮件已在询价 Agent 里填好，点“发送”。这封邮件是合成的，已替你勾选同意发送给模型服务。',label:'打开询价 Agent',go:()=>tourFillRevision(c)};
+  if(p.pending_candidates){const b=(c.candidate_batches||[]).find(b=>b.expected_revision===c.revision&&b.candidates.some(x=>x.status==='pending')),x=b?.candidates.find(x=>x.status==='pending');
+    return {n:4,title:'接纳修订候选',why:'Agent 把修订提成了候选。接纳后它才改动正式询价行，旧批准随之失效。',label:'去审阅',go:()=>x&&setFocus('cand',b.id+':'+x.id)}}
+  if(!active.every(r=>r.approved))return {n:4,title:'旧批准已失效：看看改了什么',why:'MatrixOne 把当前询价行和批准时的快照逐行比对，能看到这次改了哪一行。看完重新批准。',label:'看版本比对',go:()=>setFocus('log'),alt:['重新批准',()=>setFocus('approve','a')]};
+  return {n:5,title:'体验完成',why:'现在有两个批准快照。版本与审计里能看到每次批准、接纳和改动；也可以问 Agent“批准后改过什么”。',label:'看版本与审计',go:()=>setFocus('log'),alt:['看报价单',()=>setFocus('output','o')]};
+}
 function tourStep(c){
+  if(tour.revised?.startsWith(c.id+':'))return tourRevision(c);
   const p=c.progress,active=c.rows.filter(r=>!r.excluded);
   if(!active.length&&!p.pending_candidates)return {n:1,title:'让 Agent 处理这封邮件',why:'在询价 Agent 里发送消息，它会提取询价行、查价，缺信息时起草澄清邮件。',label:'打开询价 Agent',go:()=>setFocus('agent')};
   if(p.pending_candidates){const b=(c.candidate_batches||[]).find(b=>b.expected_revision===c.revision&&b.candidates.some(x=>x.status==='pending')),x=b?.candidates.find(x=>x.status==='pending');
@@ -584,18 +600,19 @@ function tourStep(c){
   const unpriced=active.find(r=>!r.price);
   if(unpriced)return {n:3,title:'补上价格依据',why:'没有唯一有效的价格就不能报价。演示里点“加载合成演示价表”即可。',label:'去核价',go:()=>setFocus('price',unpriced.id)};
   if(!active.every(r=>r.approved))return {n:3,title:'批准当前版本',why:'批准时这一版会存成 MatrixOne 快照，之后任何改动都会让批准失效并能比对出来。',label:'去批准',go:()=>setFocus('approve','a')};
-  return {n:4,title:'体验完成',why:'可以看报价单，也可以看版本快照和审计，或者问 Agent“批准后改过什么”。',label:'看版本与审计',go:()=>setFocus('log')};
+  return {n:4,title:'客户改了数量',why:'这一版已批准并存成 MatrixOne 快照。把客户的修订交给 Agent（已替你填好），看旧批准怎样失效、改动怎样被比对出来。',label:'填好修订邮件',
+    go:()=>tourFillRevision(c),alt:['看报价单',()=>setFocus('output','o')]};
 }
 function renderTourBar(){
   const w=W();if(!w||!current||tour.caseId!==current.id)return;
   const s=tourStep(current),bar=document.createElement('div');bar.className='tour-bar';
-  bar.innerHTML=`<div class="tour-steps">${['Agent 处理','审阅候选','放行报价'].map((t,i)=>`<span class="${i+1<s.n?'done':i+1===s.n?'on':''}">${i+1<s.n?'✓':i+1} ${t}</span>`).join('')}</div>
-    <div class="tour-now"><b>${s.n<4?`第 ${s.n} 步：`:''}${esc(s.title)}</b><span>${esc(s.why)}</span></div>
-    <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-tour-go>${esc(s.label)} →</button>${s.n===4?'<button type="button" class="btn btn-sm" data-tour-out>看报价单</button>':''}<button type="button" class="text-btn" data-tour-end>结束体验</button></div>`;
+  bar.innerHTML=`<div class="tour-steps">${['Agent 处理','审阅候选','放行报价','改一处看比对'].map((t,i)=>`<span class="${i+1<s.n?'done':i+1===s.n?'on':''}">${i+1<s.n?'✓':i+1} ${t}</span>`).join('')}</div>
+    <div class="tour-now"><b>${s.n<5?`第 ${s.n} 步：`:''}${esc(s.title)}</b><span>${esc(s.why)}</span></div>
+    <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-tour-go>${esc(s.label)} →</button>${s.alt?`<button type="button" class="btn btn-sm" data-tour-alt>${esc(s.alt[0])}</button>`:''}<button type="button" class="text-btn" data-tour-end>结束体验</button></div>`;
   w.prepend(bar);
   bar.querySelector('[data-tour-go]').onclick=()=>s.go();
-  bar.querySelector('[data-tour-out]')?.addEventListener('click',()=>setFocus('output','o'));
-  bar.querySelector('[data-tour-end]').onclick=()=>{tour.caseId=null;tourSave();bar.remove()};
+  bar.querySelector('[data-tour-alt]')?.addEventListener('click',()=>s.alt[1]());
+  bar.querySelector('[data-tour-end]').onclick=()=>{tour.caseId=tour.revised=null;tourSave();bar.remove()};
   // Names are filled in for the visitor; ticking "checked" stays theirs.
   for(const [sel,v] of [['[data-keep="actor"]','评委体验'],['[data-keep="reason"]','已对照原文核对'],['[data-keep="note"]','已对照右侧原件，询价行都已提取，没有遗漏'],['#actor','评委体验']]){const el=w.querySelector(sel);if(el&&!el.value)el.value=v}
 }
@@ -610,6 +627,6 @@ const renderWorkPlain=renderWork;
 renderWork=function(){renderWorkPlain();renderTourBar();if(focus?.type==='cand'&&current)noteBranch(current.id,focus.id.split(':')[0])};
 $('tourStart').onclick=()=>run(async()=>{
   const c=await request('/semantic-demo/mail-en',{method:'POST'});
-  tour.caseId=c.id;tourSave();
+  tour.caseId=c.id;tour.revised=null;tourSave();
   await agentOpen(c,'这是一封合成询价邮件，已存为本工作单原件。请处理它。',false);
 });
