@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 from .parsing import parse_file
-from . import price_intake, clarifications, agent
+from . import price_intake, clarifications, agent, matrixone
 from .quote_html import render_quote
 from .materials import read_materials
 from .semantic import get_adapter, propose, accept_candidate, synthetic_remote_allowed
@@ -36,6 +36,7 @@ def connection():
 
 def save(c, case):
     c.execute('INSERT OR REPLACE INTO cases VALUES (?, ?)', (case['id'],json.dumps(case,ensure_ascii=False)))
+    matrixone.sync(case,analyze(case))
 
 def load(c, id):
     row = c.execute('SELECT body FROM cases WHERE id=?',(id,)).fetchone()
@@ -82,7 +83,7 @@ def health():
     from .model_usage import UsageLedger
     s=ModelSettings.from_env();enabled=s.configured and s.enabled
     calls=UsageLedger().summary()['calls'] if enabled else []
-    return {'mode':'model-live-local' if enabled else 'offline-local','model_configured':s.configured,'requests_enabled':enabled,'model_name':s.model if enabled else None,'model_connected':any(c.get('http_status')==200 for c in calls),'connection_scope':'historical HTTP success in this run; not a current probe','platform_connected':False,'request_count':len(calls)}
+    return {'mode':'model-live-local' if enabled else 'offline-local','model_configured':s.configured,'requests_enabled':enabled,'model_name':s.model if enabled else None,'model_connected':any(c.get('http_status')==200 for c in calls),'connection_scope':'historical HTTP success in this run; not a current probe','platform_connected':bool(matrixone.status['connected']),'matrixone':{k:matrixone.status[k] for k in ('enabled','connected')},'request_count':len(calls)}
 
 @app.get('/api/cases')
 def cases():
@@ -219,7 +220,9 @@ def store_batch(id,change,content,result,consent):
         if case_materials(current)['snapshot']!=content['snapshot']:raise ValueError('提取期间原件变化，未保存候选')
         current.setdefault('candidate_batches',[]).append(result)
         event(current,'candidate_propose',{'batch':result['id'],'engine':result['engine'],'model_status':result['model_status'],'count':len(result['candidates']),'metrics':result['metrics'],'remote_consent':consent})
-    return mutate(id,change,store)
+    updated=mutate(id,change,store)
+    matrixone.branch_candidates(updated,result)
+    return updated
 
 @app.post('/api/cases/{id}/candidates/propose')
 async def propose_candidates(id:str,change:Change,adapter=Depends(get_adapter)):
@@ -370,7 +373,9 @@ def approval(id:str,change:Change):
     def action(c,v):
         source_guard(c)
         approve(c,v.get('actor',''))
-    return mutate(id,change,action)
+    approved=mutate(id,change,action)
+    matrixone.snapshot_approval(approved,change.values.get('actor',''))
+    return approved
 
 @app.get('/api/cases/{id}/draft')
 def draft(id:str):
@@ -476,6 +481,7 @@ class CaseWorkspace:
     def case(self):
         with connection() as c:return load(c,self.id)
     def content(self,case):return case_materials(case)
+    def history(self):return matrixone.report(self.id)
     def add_mail(self,text):
         case=self.case();data=text.encode()
         if any(f['sha256']==hashlib.sha256(data).hexdigest() for f in case_materials(case)['files']):raise ValueError('这封邮件已经在工作单里')
@@ -512,6 +518,11 @@ def agent_start(body:AgentStart,session=Depends(get_agent_session)):
     if len(text)>agent.MAX_MESSAGE:raise HTTPException(422,'内容过长，请分段发送')
     return import_bytes(f"邮件-{datetime.now().strftime('%m%d-%H%M%S')}.txt",text.encode())
 
+@app.get('/api/cases/{id}/matrixone')
+def matrixone_report(id:str):
+    with connection() as c:load(c,id)
+    return matrixone.report(id)
+
 @app.get('/api/cases/{id}/agent/progress')
 def agent_progress(id:str):
     return {'steps':AGENT_PROGRESS.get(id)}
@@ -539,4 +550,6 @@ async def agent_turn(id:str,body:AgentMessage,session=Depends(get_agent_session)
     with connection() as c:
         c.execute('INSERT INTO agent_turns (case_id,body) VALUES (?,?)',(id,json.dumps(turn,ensure_ascii=False)))
         case=load(c,id)
+        seq=c.execute('SELECT COUNT(*) FROM agent_turns WHERE case_id=?',(id,)).fetchone()[0]
+    matrixone.remember_turn(id,seq,case['revision'],turn)
     return {'turn':turn,'case':view(case)}

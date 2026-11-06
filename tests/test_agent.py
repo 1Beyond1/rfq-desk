@@ -60,7 +60,7 @@ def test_a_turn_extracts_prices_and_reports_without_touching_formal_lines(client
 
 def test_no_tool_can_accept_price_approve_or_send():
     names={t['function']['name'] for t in agent.TOOLS}
-    assert names=={'get_case_state','read_original','extract_candidates','add_mail_to_case','check_prices','explain_row','draft_clarification','search_rules'}
+    assert names=={'get_case_state','read_original','extract_candidates','add_mail_to_case','check_prices','explain_row','draft_clarification','search_rules','version_history'}
 
 def test_unknown_tool_changes_nothing(client):
     script=Script([call('approve_case',actor='x')],'做不了。')
@@ -260,3 +260,11 @@ def test_progress_shows_the_steps_of_a_running_turn_and_clears_after():
 def test_progress_route_is_empty_when_nothing_runs(client):
     case=open_case(client)
     assert client.get(f"/api/cases/{case['id']}/agent/progress").json()=={'steps':None}
+
+def test_a_chinese_header_table_can_be_approved(client):
+    csv='询价号,件号,数量,单位,件状\nRFQ-1,P-1,2,EA,NE\n'.encode()
+    case=client.post('/api/import',files={'file':('t.csv',csv)}).json()
+    price={'part':'P-1','unit':'EA','condition':'NE','currency':'USD','amount':'10.00','valid_from':'2020-01-01','valid_until':'2099-01-01','lead_time':'7 天','source':'合成','kind':'synthetic'}
+    case=client.post(f"/api/cases/{case['id']}/prices",json={'revision':case['revision'],'values':{'prices':[price]}}).json()
+    r=client.post(f"/api/cases/{case['id']}/approve",json={'revision':case['revision'],'values':{'actor':'张工'}})
+    assert r.status_code==200,r.text

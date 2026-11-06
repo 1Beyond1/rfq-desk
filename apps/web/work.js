@@ -468,8 +468,24 @@ function viewOutput(){
 /* ---------- log ---------- */
 const eventNames={import:'导入原件',material_append:'追加原件',parse_review:'解析警告核查',resolve:'行裁定',price_update:'价表新版本',price_import_review:'价目原件审阅',approve:'批准',export:'正式输出',candidate_accept:'接纳候选',candidate_partial_accept:'局部接纳候选',candidate_reject:'拒绝候选',clarification_register:'登记澄清',clarification_receive:'登记答复',clarification_apply:'答复回填',clarification_resolve:'澄清解决',clarification_superseded:'澄清旧目标结束'};
 function eventSummary(e){const d=e.detail||{};if(e.action==='approve')return `批准人 ${d.actor} · 工作版本 ${d.revision}`;if(e.action==='export')return `${d.format} · 工作版本 ${d.revision}`;if(e.action==='price_update')return `价表 v${d.version} · 影响 ${(d.affected||[]).length} 行`;return Object.keys(d).slice(0,4).join(' · ')||'详情'}
+const actionNames={import:'导入原件',resolve:'人工裁定',approve:'批准',price_update:'价表更新',candidate_propose:'模型提出候选',candidate_accept:'接纳候选',candidate_reject:'拒绝候选',material_append:'追加原件',clarification_register:'登记澄清',clarification_receive:'收到答复',clarification_resolve:'澄清关闭',review:'核查解析警告'};
+async function loadMatrixOne(caseId){
+  const box=$('moPanel');if(!box)return;
+  let r;try{r=await request(`/cases/${caseId}/matrixone`)}catch(e){box.innerHTML=`<p class="hint">${esc(e.message)}</p>`;return}
+  if(current?.id!==caseId||!$('moPanel'))return;
+  if(!r.enabled){box.innerHTML='<p class="hint">本环境未连接 MatrixOne。</p>';return}
+  if(!r.connected){box.innerHTML=`<p class="warn-line">MatrixOne 暂时连不上，工作单照常可用：${esc(r.error||'')}</p>`;return}
+  const since=r.since_last_approval;
+  const change=c=>`<li>${esc(c.kind)} ${esc(c.rfq||'')} / ${esc(c.part)}${c.fields?'：'+Object.entries(c.fields).map(([k,[a,b]])=>`${esc(fieldNames[k]||k)} ${esc(a??'空')} → ${esc(b??'空')}`).join('，'):''}</li>`;
+  box.innerHTML=`<p class="hint">数据库 ${esc(r.database)}。每次批准对整个库打一个快照；模型候选写在数据分支上，和正式询价行做差异对比。</p>
+  <h4>批准快照（${r.snapshots.length}）</h4>${r.snapshots.length?`<ul>${r.snapshots.map(s=>`<li class="mono">${esc(s.name)} · 工作版本 ${s.case_revision} · 价表 v${s.price_version} · ${esc(s.actor)} · ${esc(s.at)}</li>`).join('')}</ul>`:'<p class="hint">还没有批准过。</p>'}
+  ${since?`<h4>上次批准之后的改动</h4>${since.changes.length?`<ul>${since.changes.map(change).join('')}</ul>`:'<p class="hint">没有改动，和批准时一致。</p>'}<p class="hint">批准时这张工作单的 Agent 对话有 ${since.memory_at_approval} 轮（按快照回看）。</p>`:''}
+  <h4>候选分支（${r.branches.length}）</h4>${r.branches.length?r.branches.map(b=>`<p class="mono">${esc(b.name)} · ${b.candidates} 条候选</p><ul>${b.diff.map(d=>`<li>${esc({INSERT:'新增',UPDATE:'修改',DELETE:'删除'}[d.flag]||d.flag)} ${esc(d.rfq||'')} / ${esc(d.part||'')} · ${esc(d.quantity||'')} ${esc(d.unit||'')}</li>`).join('')||'<li>相对正式行没有差异</li>'}</ul>`).join(''):'<p class="hint">还没有模型候选。</p>'}
+  <h4>决策审计（共 ${r.audit_total} 条，Agent 对话 ${r.agent_memory} 轮）</h4><ul>${r.audit.map(a=>`<li><span class="mono hint">${esc(a.at)}</span> ${esc(actionNames[a.action]||a.action)}</li>`).join('')}</ul>`;
+}
 function viewLog(){
   W().innerHTML=head('版本与决策记录',`${current.events.length} 条`,{sub:'按时间倒序，记录来自服务端。'})+`<div class="w-body"><div class="events">${current.events.slice().reverse().map(e=>`<div class="event"><span class="mono hint">${esc(String(e.time).replace('T',' ').slice(0,19))}</span><span class="chip">${esc(eventNames[e.action]||e.action)}</span><details><summary>${esc(eventSummary(e))}</summary><pre class="pre">${esc(JSON.stringify(e.detail,null,2))}</pre></details></div>`).join('')||'<p class="empty">暂无记录。</p>'}</div></div>`;
+  const mo=document.createElement('section');mo.className='card';mo.innerHTML='<div class="card-head"><h3>版本与审计 · MatrixOne</h3></div><div id="moPanel"><p class="hint">读取中…</p></div>';W().querySelector('.w-body')?.prepend(mo);loadMatrixOne(current.id);
 }
 
 run(boot);
@@ -477,7 +493,7 @@ run(boot);
 
 /* ---------- 询价 Agent ---------- */
 const agentChat={caseId:null,turns:[],busy:false,consent:false,text:'',pending:'',loaded:false};
-const agentToolNames={get_case_state:'读取工作单',read_original:'读原文',extract_candidates:'提取候选',add_mail_to_case:'把邮件加入工作单',check_prices:'查价',explain_row:'查询价行依据',draft_clarification:'起草澄清邮件',search_rules:'查规则'};
+const agentToolNames={get_case_state:'读取工作单',read_original:'读原文',extract_candidates:'提取候选',add_mail_to_case:'把邮件加入工作单',check_prices:'查价',explain_row:'查询价行依据',draft_clarification:'起草澄清邮件',version_history:'查版本历史',search_rules:'查规则'};
 async function agentLoad(){
   const id=current.id;agentChat.caseId=id;agentChat.turns=[];agentChat.loaded=false;agentChat.text='';agentChat.pending='';
   try{const log=await request(`/cases/${id}/agent`);if(current?.id===id){agentChat.turns=log.turns;agentChat.loaded=true;if(focus?.type==='agent')renderWork()}}

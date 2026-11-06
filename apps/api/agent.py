@@ -35,7 +35,7 @@ SYSTEM='''你是航材询报价工作单里的询价助手，目标是帮经办�
 - 用户要你处理询价，或工作单里还没有询价行也没有候选时，直接提取候选。提取结果里已经带了每行的查价，不用再查一遍，也不用先读状态或原文。
 - 提取结果里 clarification_draft_ready 为真，表示系统已经生成了澄清邮件草稿，页面会显示，你只需提一句。为假时不要说起草了邮件。原文没写交期或特殊要求不算缺。
 - 用户贴来新的邮件（回信、修订、补充）时，先把它加入工作单，再提取候选。
-- 用户问为什么、依据是什么时，查询价行详情或规则，说明出处。候选还没接纳时没有询价行，不要查询价行详情。
+- 用户问为什么、依据是什么时，查询价行详情或规则，说明出处。用户问改过什么、批准后有没有变、以前是什么样时，查版本历史。候选还没接纳时没有询价行，不要查询价行详情。
 - 用得上的才调用，能一步做完就不要多步。
 
 硬规则：
@@ -58,6 +58,7 @@ TOOLS=[
  fn('explain_row','查看一条询价行的字段、原文出处、异常和价格。',{'row_id':{**TEXT,'description':'工作单状态里的 row_id'}},['row_id']),
  fn('draft_clarification','根据当前缺失和冲突，起草一封发给对方的澄清邮件。只生成文字，不发送。'),
  fn('search_rules','查本系统的处理规则。',{'query':TEXT},['query']),
+ fn('version_history','查 MatrixOne 里这张工作单的版本：每次批准的快照、上次批准后改了什么、候选分支相对正式行的差异、审计记录条数。'),
 ]
 
 class ModelUnavailable(Exception):pass
@@ -232,6 +233,7 @@ async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_
         if name=='check_prices':return check_prices(case,str(args.get('part','')),str(args.get('unit','')),str(args.get('condition','')),str(args.get('quantity','')))
         if name=='explain_row':return explain_row(case,str(args.get('row_id','')))
         if name=='search_rules':return search_rules(args.get('query',''))
+        if name=='version_history':return ws.history()
         if name=='draft_clarification':
             result=draft_clarification(case);draft=result.get('draft') or draft
             return result
