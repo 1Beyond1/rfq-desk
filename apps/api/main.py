@@ -6,13 +6,16 @@ import os
 import sqlite3
 import csv
 import io
+import re
+import secrets
 import uuid
+from contextvars import ContextVar
 
 from datetime import datetime
 import hashlib
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 from .parsing import parse_file
 from . import price_intake, clarifications, agent, matrixone
@@ -33,10 +36,39 @@ def connection():
     with sqlite3.connect(DB) as c:
         c.execute('CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS agent_turns (seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, body TEXT NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS case_owners (case_id TEXT PRIMARY KEY, visitor TEXT NOT NULL)')
         yield c
+
+# On the public demo each browser sees only the work orders it created, so nothing one visitor pastes reaches
+# another. Off by default: local review and tests keep one shared desk.
+SCOPED = os.getenv('RFQ_VISITOR_SCOPE') == '1'
+VISITOR: ContextVar[str] = ContextVar('visitor', default='')
+CASE_PATH = re.compile(r'^/api/cases/([^/]+)')
+
+def owns(case_id, visitor):
+    with connection() as c:
+        row = c.execute('SELECT visitor FROM case_owners WHERE case_id=?', (case_id,)).fetchone()
+    return bool(row) and secrets.compare_digest(row[0], visitor)
+
+@app.middleware('http')
+async def visitor_scope(request: Request, call_next):
+    if not SCOPED: return await call_next(request)
+    visitor = request.cookies.get('rfq_visitor', '')
+    fresh = not re.fullmatch(r'[A-Za-z0-9_-]{32,64}', visitor)
+    if fresh: visitor = secrets.token_urlsafe(32)
+    token = VISITOR.set(visitor)
+    try:
+        found = CASE_PATH.match(request.url.path)
+        # Someone else's work order looks exactly like one that does not exist.
+        response = JSONResponse({'detail':'找不到工作单'}, status_code=404) if found and not owns(found.group(1), visitor) else await call_next(request)
+    finally: VISITOR.reset(token)
+    if fresh: response.set_cookie('rfq_visitor', visitor, max_age=30*86400, httponly=True, samesite='lax', secure=request.headers.get('x-forwarded-proto')=='https')
+    return response
 
 def save(c, case):
     c.execute('INSERT OR REPLACE INTO cases VALUES (?, ?)', (case['id'],json.dumps(case,ensure_ascii=False)))
+    # The first save of a new work order records who created it.
+    if SCOPED and VISITOR.get(): c.execute('INSERT OR IGNORE INTO case_owners VALUES (?, ?)', (case['id'], VISITOR.get()))
     matrixone.sync(case,analyze(case))
 
 def load(c, id):
@@ -89,7 +121,8 @@ def health():
 @app.get('/api/cases')
 def cases():
     with connection() as c:
-        return [{'id':x['id'],'title':x['title'],'revision':x['revision'],**progress(x)} for (b,) in c.execute('SELECT body FROM cases ORDER BY rowid DESC') for x in [json.loads(b)]]
+        rows = c.execute('SELECT body FROM cases WHERE id IN (SELECT case_id FROM case_owners WHERE visitor=?) ORDER BY rowid DESC', (VISITOR.get(),)) if SCOPED else c.execute('SELECT body FROM cases ORDER BY rowid DESC')
+        return [{'id':x['id'],'title':x['title'],'revision':x['revision'],**progress(x)} for (b,) in rows for x in [json.loads(b)]]
 
 def import_bytes(name, data):
     if Path(name).suffix.lower() not in ('.txt','.eml','.csv','.xlsx','.pdf'):raise HTTPException(422,'支持 EML、CSV、XLSX、TXT 和文本型 PDF')
