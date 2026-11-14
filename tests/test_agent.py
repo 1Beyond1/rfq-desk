@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api import agent, main, semantic
+from apps.api import agent, main, semantic, material_policy
 from apps.api.model_config import ModelSettings
 
 MAIL='询价单 RFQ-77，件号 PL-9 数量 2 EA 件状 NE。\n麻烦尽快。'
@@ -60,7 +60,7 @@ def test_a_turn_extracts_prices_and_reports_without_touching_formal_lines(client
 
 def test_no_tool_can_accept_price_approve_or_send():
     names={t['function']['name'] for t in agent.TOOLS}
-    assert names=={'get_case_state','read_original','extract_candidates','add_mail_to_case','check_prices','explain_row','draft_clarification','search_rules','version_history'}
+    assert names=={'get_case_state','read_original','extract_candidates','add_mail_to_case','check_prices','explain_row','draft_clarification','search_rules','version_history','lookup_stock','search_parts','historical_quotes','find_alternatives','pending_overview','list_mails'}
 
 def test_unknown_tool_changes_nothing(client):
     script=Script([call('approve_case',actor='x')],'做不了。')
@@ -84,6 +84,33 @@ def test_official_material_is_never_sent(client,tmp_path):
     script=Script('x');install(script);case=open_case(client)
     r=say(client,case)
     assert r.status_code==422 and '官方' in r.json()['detail'] and script.requests==0
+
+@pytest.mark.parametrize('manifest_state',['known','missing','corrupt'])
+def test_both_model_entries_enforce_policy_without_local_originals(client,tmp_path,monkeypatch,manifest_state):
+    import hashlib
+    manifest=tmp_path/'official_hashes.json'
+    if manifest_state=='known':
+        manifest.write_text(json.dumps({'schema':1,'sha256':[hashlib.sha256(MAIL.encode()).hexdigest()]}))
+    elif manifest_state=='corrupt':manifest.write_text('{')
+    monkeypatch.setattr(material_policy,'MANIFEST',manifest)
+    script=Script('must not be called');extractor=Extractor();install(script,extractor)
+    case=open_case(client)
+    assert not (tmp_path/'data/raw/official-rfq').exists()
+    assert say(client,case).status_code==422
+    response=client.post(f"/api/cases/{case['id']}/candidates/propose",json={'revision':case['revision'],'values':{'mode':'model','remote_consent':True}})
+    assert response.status_code==422 and '官方' in response.json()['detail']
+    assert script.requests==0 and extractor.calls==0
+    unchanged=client.get(f"/api/cases/{case['id']}").json()
+    assert unchanged['revision']==case['revision'] and not unchanged.get('candidate_batches')
+    # An unavailable policy only disables remote processing; local parsing/review remains usable.
+    assert client.post(f"/api/cases/{case['id']}/candidates/propose",json={'revision':case['revision'],'values':{'mode':'offline'}}).status_code==200
+
+def test_direct_extraction_also_blocks_new_local_official_originals(client,tmp_path):
+    folder=tmp_path/'data/raw/official-rfq';folder.mkdir(parents=True)
+    (folder/'synthetic-control.txt').write_bytes(MAIL.encode())
+    extractor=Extractor();install(Script('unused'),extractor);case=open_case(client)
+    response=client.post(f"/api/cases/{case['id']}/candidates/propose",json={'revision':case['revision'],'values':{'mode':'model','remote_consent':True}})
+    assert response.status_code==422 and extractor.calls==0
 
 def test_model_off_is_reported_and_other_features_stay(client):
     main.app.dependency_overrides[main.get_agent_session]=lambda:None
@@ -192,14 +219,15 @@ def test_a_reply_answers_what_the_original_left_open():
                                                cand({'rfq':'R1','part':'B','quantity':'12','unit':'EA','condition':'AR'},['condition']),cand({'rfq':'R1','part':'B','quantity':'15','unit':'EA','condition':'FN'})]}
     assert agent.draft_clarification(base(candidate_batches=[batch]))['questions']==[]
 
-def test_a_long_message_on_a_synthetic_case_still_needs_consent(client,tmp_path):
-    install(Script('好'))
+def test_a_long_message_on_a_synthetic_case_sends_without_consent(client,tmp_path):
+    # 合成样例已核过可外发，问句长短都不再要求勾选；真实材料仍由 material_policy 拦。
+    install(Script('好','好'))
     source=Path(__file__).resolve().parents[1]/'data/synthetic/realistic-mail'
     target=tmp_path/'data/synthetic/realistic-mail';target.mkdir(parents=True)
     for f in source.glob('*.eml'):(target/f.name).write_bytes(f.read_bytes())
     case=client.post('/api/semantic-demo/mail-en').json()
     assert client.post(f"/api/cases/{case['id']}/agent",json={'message':'处理这张询价'}).status_code==200
-    assert client.post(f"/api/cases/{case['id']}/agent",json={'message':'对方回信：'+'x'*200}).status_code==422
+    assert client.post(f"/api/cases/{case['id']}/agent",json={'message':'对方回信：'+'x'*200}).status_code==200
 
 def test_a_reply_cannot_claim_a_draft_that_does_not_exist(client):
     install(Script('提到 1 行。澄清邮件已起草，请确认后发送。'));case=open_case(client)
@@ -306,3 +334,12 @@ def test_router_puts_a_recent_failure_last_and_prefers_the_faster():
     assert r.order([a,b])==[b,a]
     r.record(b,failed=True)
     assert r.order([a,b])==[a,b]
+
+def test_timeline_steps_summarize_what_each_tool_returned():
+    s=agent.step_summary
+    assert s('extract_candidates',{},{'candidates':[{},{}],'questions':[]})=='2 条候选，每个值带原文出处'
+    assert s('check_prices',{'part':'66-1234-5'},{'matches':[]})=='66-1234-5：无同键价格'
+    assert s('check_prices',{'part':'P1'},{'matches':[{}],'verdict':'有唯一有效价格'})=='P1：有唯一有效价格'
+    assert s('draft_clarification',{},{'questions':[],'note':'x'})=='不需要：没有待确认内容'
+    assert s('draft_clarification',{},{'draft':'…','questions':2})=='已起草，2 个问题（未发送）'
+    assert s('read_original',{},{'error':'读不到'})=='未完成：读不到'

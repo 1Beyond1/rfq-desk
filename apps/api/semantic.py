@@ -143,7 +143,6 @@ def expand_compact_payload(payload,materials):
             a=starts[occ] if type(occ) is int and 0<=occ<len(starts) else starts[0]
             fields[field]={'value':v,'evidence':{k:u[k] for k in ('file','sha256','location')}|{'start':a,'end':a+len(v),'quote':v}}
         unit_after_quantity(fields,materials)
-        # Without a cited part there is no line for a person to review.
         if 'part' not in fields:dropped+=len(fields);continue
         output.append({'fields':fields})
     return {'candidates':output},dropped
@@ -162,7 +161,6 @@ class AdapterReply:
     dropped_fields:int=0
 
 def output_cap(materials,budget):
-    # Roomy enough for 30 compact candidates on long material; latency was not found to depend on it.
     chars=sum(len(u['text']) for f in materials['files'] for u in f['units'])
     return min(2000+chars//2,8000,budget['max_tokens'])
 
@@ -181,7 +179,7 @@ class HTTPExtractionAdapter:
         raw=None;status='transport_failed';metadata={}
         try:
             async with httpx.AsyncClient(transport=self.transport,timeout=budget['max_seconds'],trust_env=False,follow_redirects=False) as client:
-                pending=asyncio.create_task(client.post(self.settings.endpoint,headers={'Authorization':'Bearer '+self.settings.key},json={'model':self.settings.model,'messages':[{'role':'system','content':prompt},{'role':'user','content':json.dumps(materials,ensure_ascii=False)}],'max_tokens':output_cap(materials,budget),'response_format':{'type':'json_object'}}))
+                pending=asyncio.create_task(client.post(self.settings.endpoint,headers={'Authorization':'Bearer '+self.settings.key},json={'model':self.settings.model,'messages':[{'role':'system','content':prompt},{'role':'user','content':json.dumps(materials,ensure_ascii=False)}],'max_tokens':output_cap(materials,budget),'response_format':{'type':'json_object'},**self.settings.no_thinking}))
                 try:
                     while not pending.done():
                         await asyncio.wait({pending},timeout=.2)
@@ -231,7 +229,6 @@ class RoutedAdapter(HTTPExtractionAdapter):
 
 def get_adapter():
     settings=ModelSettings.from_env()
-    # A future service must be explicitly enabled; configuration alone is insufficient.
     if not settings.configured:return UnconfiguredAdapter()
     if not settings.enabled:
         adapter=UnconfiguredAdapter();adapter.status='disabled';return adapter
@@ -241,7 +238,10 @@ def get_adapter():
 def synthetic_remote_allowed(materials,root):
     sha=lambda p:__import__('hashlib').sha256(p.read_bytes()).hexdigest()
     allowed={sha(root/'data/synthetic/semantic'/name) for name in ['prose-cn.eml','forward-revision.eml'] if (root/'data/synthetic/semantic'/name).is_file()}
+    guided=root/'data/synthetic/guided.eml'
+    if guided.is_file():allowed.add(sha(guided))
     allowed|={sha(p) for p in (root/'data/synthetic/realistic-mail').glob('*.eml')}
+    allowed|={sha(p) for p in (root/'data/synthetic/inbox').glob('*.eml')}
     for folder,limit in [('model-live-20261027',6),('competitive-20261028',8),('goal-readiness-20261029',6)]:
         manifest=root/'data/synthetic'/folder/'ALLOWLIST.json'
         if manifest.is_file():

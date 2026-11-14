@@ -11,7 +11,7 @@ import threading
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 os.chdir(ROOT)
-os.environ['RFQ_DB']=str(ROOT/'var/rfq.sqlite3')
+os.environ['RFQ_DB']=str(Path(os.environ.get('RFQ_DB') or ROOT/'var/rfq.sqlite3').expanduser().resolve())
 model_enabled='--model' in sys.argv
 os.environ['RFQ_ENABLE_MODEL_REQUESTS']='1' if model_enabled else '0'
 os.environ['RFQ_ENABLE_PLATFORM_SNAPSHOT_REQUESTS']='0'
@@ -19,9 +19,18 @@ if not model_enabled:
     for name in ('RFQ_MODEL_URL','RFQ_MODEL_KEY','RFQ_MODEL_NAME'):os.environ[name]=''
 else:
     from urllib.parse import urlsplit
-    endpoint=urlsplit(os.environ.get('RFQ_MODEL_URL',''))
-    if endpoint.scheme!='https' or not endpoint.hostname or endpoint.username or endpoint.password or not os.environ.get('RFQ_MODEL_KEY') or not os.environ.get('RFQ_MODEL_NAME'):
+    from apps.api.model_config import ModelSettings
+    from apps.api.material_policy import known_hashes
+    primary=ModelSettings.from_env()
+    if not primary.configured:
         raise SystemExit('Model mode requires an HTTPS endpoint, model name and key in the process environment.')
+    try:
+        for route in ModelSettings.routes():
+            endpoint=urlsplit(route.endpoint)
+            if endpoint.scheme!='https' or not endpoint.hostname or endpoint.username or endpoint.password:
+                raise ValueError('Each model route requires an HTTPS endpoint without URL credentials.')
+        known_hashes(ROOT)
+    except ValueError as e:raise SystemExit(str(e))
 for name in ('RFQ_MOI_API_KEY','RFQ_MOI_WORKSPACE_ID','RFQ_MOI_VOLUME_ID'):os.environ[name]=''
 # A container listens on all of its own interfaces; the host decides what reaches them.
 HOST=os.environ.get('RFQ_BIND_HOST','127.0.0.1')
@@ -46,6 +55,10 @@ if __name__=='__main__':
     (ROOT/'var/process.json').write_text(json.dumps(info,indent=2),encoding='utf-8')
     print('RFQ Desk local review: http://127.0.0.1:5311/ ; Ctrl+C stops both services.',flush=True)
     thread.start()
-    try:uvicorn.run(main.app,host=HOST,port=8311,access_log=False)
+    # Only an explicitly configured proxy may supply the visitor address.
+    # In Docker the host reverse proxy reaches us through a bridge gateway.
+    # Keeping the default loopback-only prevents arbitrary forwarded-IP trust.
+    try:uvicorn.run(main.app,host=HOST,port=8311,access_log=False,
+                    proxy_headers=True,forwarded_allow_ips=os.getenv('RFQ_PROXY_IPS','127.0.0.1'))
     finally:
         server.shutdown();server.server_close();thread.join(timeout=3)

@@ -1,4 +1,4 @@
-/* Only row edit deltas, never originals, case snapshots, prices or credentials. */
+/* Row edit deltas kept in browser storage. */
 class RfqDraftStore {
  static PREFIX='rfqdesk.drafts.v1:';
  static SETTINGS='rfqdesk.drafts.settings.v1';

@@ -1,4 +1,4 @@
-/* Display contracts and tab-local, version-bound form memory. No business decisions. */
+/* Display contracts and tab-local, version-bound form memory. */
 const RfqUiState=(()=>{
  const priceCodes=new Set(['missing_price','ambiguous_price']);
  function issueCode(message){

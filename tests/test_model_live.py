@@ -6,6 +6,18 @@ def test_usage_and_secret():
     assert usage_account(None) is None
     assert usage_account({'total_tokens':True}) is None
     assert 'secret-test' not in repr(ModelSettings('url','secret-test','m',True))
+
+def test_fallback_requires_a_complete_route(monkeypatch):
+    for name in ('RFQ_MODEL_URL','RFQ_MODEL_KEY','RFQ_MODEL_NAME','RFQ_MODEL_FALLBACK_URL','RFQ_MODEL_FALLBACK_KEY','RFQ_MODEL_FALLBACK_NAME'):
+        monkeypatch.delenv(name,raising=False)
+    monkeypatch.setenv('RFQ_MODEL_URL','https://primary.invalid/v1/chat/completions')
+    monkeypatch.setenv('RFQ_MODEL_KEY','primary-test');monkeypatch.setenv('RFQ_MODEL_NAME','primary')
+    assert len(ModelSettings.routes())==1
+    monkeypatch.setenv('RFQ_MODEL_FALLBACK_KEY','fallback-test')
+    with pytest.raises(ValueError,match='备用模型配置不完整'):ModelSettings.routes()
+    monkeypatch.setenv('RFQ_MODEL_FALLBACK_URL','https://fallback.invalid/v1/chat/completions')
+    monkeypatch.setenv('RFQ_MODEL_FALLBACK_NAME','fallback')
+    assert [r.model for r in ModelSettings.routes()]==['primary','fallback']
 def test_daily_product_limits_reset_by_day_and_do_not_expire(tmp_path,monkeypatch):
     monkeypatch.setenv('RFQ_MODEL_LEDGER',str(tmp_path/'ledger.sqlite'));monkeypatch.delenv('RFQ_MODEL_RUN_ID',raising=False);monkeypatch.setenv('RFQ_MODEL_MAX_CALLS','2')
     l=UsageLedger();assert l.run.startswith('daily-')

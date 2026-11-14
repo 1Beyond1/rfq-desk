@@ -1,0 +1,290 @@
+[
+ {
+  "sample_id": "mail-01",
+  "filename": "inbox-01.eml",
+  "subject": "新询价 两条航材需求",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "new_rfq",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 1.0,
+    "revision": 0.0,
+    "other": 0.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 离线判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-02",
+  "filename": "inbox-02.eml",
+  "subject": "AOG 询价 现货与证书",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "new_rfq",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 0.99,
+   "scores": {
+    "new_rfq": 0.99,
+    "revision": 0.01,
+    "other": 0.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 离线判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-03",
+  "filename": "inbox-03.eml",
+  "subject": "询价 液压油滤芯 无件号",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "new_rfq",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 0.84,
+   "scores": {
+    "new_rfq": 0.88,
+    "revision": 0.0,
+    "other": 0.02,
+    "suspicious": 0.1
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 离线判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-04",
+  "filename": "inbox-04.eml",
+  "subject": "回信 修订 RFQ000901 数量",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "revision",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 0.0,
+    "revision": 1.0,
+    "other": 0.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 离线判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-05",
+  "filename": "inbox-05.eml",
+  "subject": "市场活动 产品推广",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "other",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 0.0,
+    "revision": 0.0,
+    "other": 1.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-06",
+  "filename": "inbox-06.eml",
+  "subject": "物流通知 包裹已签收",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "other",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 0.0,
+    "revision": 0.0,
+    "other": 1.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-07",
+  "filename": "inbox-07.eml",
+  "subject": "可疑邮件 要求跳过批准",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "suspicious",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 0.0,
+    "revision": 0.0,
+    "other": 0.0,
+    "suspicious": 1.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": true,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 离线判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-08",
+  "filename": "inbox-08.eml",
+  "subject": "信息待确认 关于上次的滤芯",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "other",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 0.52,
+   "scores": {
+    "new_rfq": 0.01,
+    "revision": 0.34,
+    "other": 0.64,
+    "suspicious": 0.01
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": true,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-09",
+  "filename": "inbox-09.eml",
+  "subject": "年度备件促销 全场 8 折",
+  "sender": "synthetic-sales@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "new_rfq",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 0.85,
+   "scores": {
+    "new_rfq": 0.89,
+    "revision": 0.06,
+    "other": 0.04,
+    "suspicious": 0.01
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-10",
+  "filename": "inbox-10.eml",
+  "subject": "Re: RFQ000901 数量调整并追加件号",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "revision",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 0.0,
+    "revision": 1.0,
+    "other": 0.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-11",
+  "filename": "inbox-11.eml",
+  "subject": "URGENT 发货指令 请立即执行",
+  "sender": "synthetic-supplier@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "suspicious",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 0.97,
+   "scores": {
+    "new_rfq": 0.0,
+    "revision": 0.0,
+    "other": 0.02,
+    "suspicious": 0.98
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": true,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ },
+ {
+  "sample_id": "mail-12",
+  "filename": "inbox-12.eml",
+  "subject": "AOG REQUIRED WITHIN 24H",
+  "sender": "synthetic-buyer@example.invalid",
+  "classification": "synthetic",
+  "preclass": {
+   "category": "new_rfq",
+   "provider": "Jev",
+   "model": "jev-1.14.0",
+   "confidence": 1.0,
+   "scores": {
+    "new_rfq": 1.0,
+    "revision": 0.0,
+    "other": 0.0,
+    "suspicious": 0.0
+   },
+   "score_type": "模型概率与置信度，非实测正确率",
+   "needs_review": false,
+   "reason": "按固定业务选项判断；不确定或可疑邮件交人工",
+   "frozen_at": "2026-11-13",
+   "frozen_from": "Jev 判过一次，随样本固化；换样本需重跑"
+  }
+ }
+]

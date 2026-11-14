@@ -16,9 +16,9 @@ import hashlib
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .parsing import parse_file
-from . import price_intake, clarifications, agent, matrixone
+from . import price_intake, clarifications, agent, matrixone, material_policy, accounts, references, inbox
 from .model_router import ROUTER
 from .quote_html import render_quote
 from .materials import read_materials
@@ -28,7 +28,6 @@ from .domain import new_case, analyze, replace_prices, approve, export_data, eve
 ROOT = Path(__file__).resolve().parents[2]
 DB = Path(os.getenv('RFQ_DB') or str(ROOT/'var/rfq.sqlite3'))
 app = FastAPI(title='航材询报价工作台', version='0.1.0')
-app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:5311','http://localhost:5311'], allow_methods=['GET','POST','PATCH'], allow_headers=['Content-Type'])
 
 @contextmanager
 def connection():
@@ -44,6 +43,8 @@ def connection():
 SCOPED = os.getenv('RFQ_VISITOR_SCOPE') == '1'
 VISITOR: ContextVar[str] = ContextVar('visitor', default='')
 CASE_PATH = re.compile(r'^/api/cases/([^/]+)')
+ACCOUNTS = accounts.Accounts(connection)
+app.include_router(accounts.router(ACCOUNTS))
 
 def owns(case_id, visitor):
     with connection() as c:
@@ -52,6 +53,38 @@ def owns(case_id, visitor):
 
 @app.middleware('http')
 async def visitor_scope(request: Request, call_next):
+    if request.method == 'OPTIONS': return await call_next(request)
+    if accounts.enabled() and request.url.path.startswith('/api/'):
+        user = ACCOUNTS.session(request.cookies.get(accounts.COOKIE, ''), touch=request.url.path!='/api/auth/session')
+        user_token = accounts.USER.set(user)
+        visitor_token = VISITOR.set('user:'+user['id'] if user else '')
+        try:
+            path = request.url.path
+            public = path in ('/api/auth/session', '/api/auth/login', '/api/auth/demo')
+            if not public:
+                if not user: raise HTTPException(401, '登录已过期，请重新登录')
+                if request.headers.get('x-rfq-account') != user['id']:
+                    raise HTTPException(409, '登录账号已变化，请刷新页面')
+                if user['must_change'] and path not in ('/api/auth/password','/api/auth/logout'):
+                    raise HTTPException(403, '首次登录请先修改密码')
+                if request.method not in ('GET','HEAD','OPTIONS'):
+                    accounts.check_origin(request)
+                    if not secrets.compare_digest(accounts.digest(request.headers.get('x-csrf-token','')), accounts.digest(user['csrf'])):
+                        raise HTTPException(403, '页面校验已失效，请刷新后重试')
+                found = CASE_PATH.match(path)
+                if found and not owns(found.group(1), VISITOR.get()): raise HTTPException(404, '找不到工作单')
+                if user['role']=='demo' and request.method not in ('GET','HEAD','OPTIONS'):
+                    if path in ('/api/import','/api/agent/start') or path.endswith('/materials') or '/prices/import/' in path or '/clarifications/' in path and path.endswith('/replies'):
+                        raise HTTPException(403,'评委体验只使用独立合成材料；导入自己的文件请登录正式账号')
+            response = await call_next(request)
+        except HTTPException as e:
+            response = JSONResponse({'detail':e.detail}, status_code=e.status_code)
+            if e.status_code == 409: response.headers['X-RFQ-Session-Changed'] = '1'
+        finally:
+            VISITOR.reset(visitor_token)
+            accounts.USER.reset(user_token)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
     if not SCOPED: return await call_next(request)
     visitor = request.cookies.get('rfq_visitor', '')
     fresh = not re.fullmatch(r'[A-Za-z0-9_-]{32,64}', visitor)
@@ -59,16 +92,22 @@ async def visitor_scope(request: Request, call_next):
     token = VISITOR.set(visitor)
     try:
         found = CASE_PATH.match(request.url.path)
-        # Someone else's work order looks exactly like one that does not exist.
         response = JSONResponse({'detail':'找不到工作单'}, status_code=404) if found and not owns(found.group(1), visitor) else await call_next(request)
     finally: VISITOR.reset(token)
     if fresh: response.set_cookie('rfq_visitor', visitor, max_age=30*86400, httponly=True, samesite='lax', secure=request.headers.get('x-forwarded-proto')=='https')
     return response
 
+app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:5311','http://localhost:5311'], allow_credentials=True, allow_methods=['GET','POST','PATCH'], allow_headers=['Content-Type','X-CSRF-Token','X-RFQ-Account'], expose_headers=['X-RFQ-Session-Changed'])
+
 def save(c, case):
+    user = accounts.USER.get()
+    if accounts.enabled() and user:
+        old = c.execute('SELECT body FROM cases WHERE id=?', (case['id'],)).fetchone()
+        offset = len(json.loads(old[0]).get('events',[])) if old else 0
+        for entry in case.get('events',[])[offset:]:
+            entry.setdefault('detail',{})['account'] = {'id':user['id'],'username':user['username']}
     c.execute('INSERT OR REPLACE INTO cases VALUES (?, ?)', (case['id'],json.dumps(case,ensure_ascii=False)))
-    # The first save of a new work order records who created it.
-    if SCOPED and VISITOR.get(): c.execute('INSERT OR IGNORE INTO case_owners VALUES (?, ?)', (case['id'], VISITOR.get()))
+    if (SCOPED or accounts.enabled()) and VISITOR.get(): c.execute('INSERT OR IGNORE INTO case_owners VALUES (?, ?)', (case['id'], VISITOR.get()))
     matrixone.sync(case,analyze(case))
 
 def load(c, id):
@@ -98,13 +137,15 @@ class Change(BaseModel):
 
 def mutate(id, change, action):
     try:
+        user = accounts.USER.get()
+        if accounts.enabled() and user:
+            change.values = {**change.values, 'actor':accounts.actor_label(user)}
         with connection() as c:
             c.execute('BEGIN IMMEDIATE')
             case = load(c,id)
             if change.revision != case['revision']: raise HTTPException(409,'工作单已更新，请刷新后重试')
             changed=action(case,change.values)
             if changed is False:return view(case)
-            # Some domain operations also support standalone callers and already advance once.
             case['revision'] = max(case['revision'],change.revision+1)
             save(c,case)
             return view(case)
@@ -121,20 +162,26 @@ def health():
 @app.get('/api/cases')
 def cases():
     with connection() as c:
-        rows = c.execute('SELECT body FROM cases WHERE id IN (SELECT case_id FROM case_owners WHERE visitor=?) ORDER BY rowid DESC', (VISITOR.get(),)) if SCOPED else c.execute('SELECT body FROM cases ORDER BY rowid DESC')
+        rows = c.execute('SELECT body FROM cases WHERE id IN (SELECT case_id FROM case_owners WHERE visitor=?) ORDER BY rowid DESC', (VISITOR.get(),)) if SCOPED or accounts.enabled() else c.execute('SELECT body FROM cases ORDER BY rowid DESC')
         return [{'id':x['id'],'title':x['title'],'revision':x['revision'],**progress(x)} for (b,) in rows for x in [json.loads(b)]]
 
-def import_bytes(name, data):
+def import_bytes(name, data, on_import=None):
     if Path(name).suffix.lower() not in ('.txt','.eml','.csv','.xlsx','.pdf'):raise HTTPException(422,'支持 EML、CSV、XLSX、TXT 和文本型 PDF')
     if not data.strip():raise HTTPException(422,'文件是空的，没有导入')
     try:
         parsed = {'rows':[],'warnings':['文本材料未执行规则表格提取；请审阅候选并核查完整性'],'fragments':[]} if Path(name).suffix.lower()=='.txt' else parse_file(name,data)
     except Exception: raise HTTPException(422,'文件无法解析，请检查文件格式和编码')
     case = new_case(name,parsed)
-    folder = ROOT/'var/uploads'/case['id']; folder.mkdir(parents=True,exist_ok=True)
-    (folder/Path(name).name).write_bytes(data)
-    event(case,'import',{'filename':name,'rows':len(case['rows'])})
-    with connection() as c: save(c,case)
+    with connection() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if accounts.USER.get() and accounts.USER.get()['role']=='demo':
+            count=c.execute('SELECT COUNT(*) FROM case_owners WHERE visitor=?',(VISITOR.get(),)).fetchone()[0]
+            if count>=6:raise HTTPException(429,'本体验空间最多保留6张合成工作单，请继续处理已有工作单')
+        if on_import:on_import(c,case)
+        folder = ROOT/'var/uploads'/case['id']; folder.mkdir(parents=True,exist_ok=True)
+        (folder/Path(name).name).write_bytes(data)
+        event(case,'import',{'filename':name,'rows':len(case['rows'])})
+        save(c,case)
     return view(case)
 
 @app.post('/api/import')
@@ -152,10 +199,11 @@ async def append_material(id:str,revision:int=Form(...),file:UploadFile=File(...
     if len(data)>20*1024*1024:raise HTTPException(413,'文件上限20MB')
     return append_file(id,revision,name,data)
 
-def append_file(id,revision,name,data):
+def append_file(id,revision,name,data,on_append=None):
     with connection() as c:
         c.execute('BEGIN IMMEDIATE');case=load(c,id)
         if revision!=case['revision']:raise HTTPException(409,'工作单已更新，请重新选择原件')
+        if on_append:on_append(c,case)
         folder=ROOT/'var/uploads'/id;folder.mkdir(parents=True,exist_ok=True);path=folder/name
         if path.exists():raise HTTPException(409,'同名原件已存在，禁止覆盖')
         with path.open('xb') as f:f.write(data)
@@ -171,10 +219,12 @@ def demo():
 
 @app.get('/api/official')
 def official():
+    if accounts.enabled(): return []
     return [str(p.relative_to(ROOT/'data/raw/official-rfq')) for p in (ROOT/'data/raw/official-rfq').rglob('*') if p.is_file()]
 
 @app.post('/api/official/{index}')
 def import_official(index:int):
+    if accounts.enabled(): raise HTTPException(403, '账号环境不开放本机研究素材')
     files = official()
     if not 0<=index<len(files): raise HTTPException(404)
     p=ROOT/'data/raw/official-rfq'/files[index]
@@ -233,6 +283,10 @@ def lifecycle_demo():
     p=ROOT/'data/synthetic/tasks/lifecycle.eml'
     return import_bytes(p.name,p.read_bytes())
 
+@app.post('/api/guided-demo')
+def guided_demo():
+    return import_bytes('合成体验-两张询价.eml', (ROOT/'data/synthetic/guided.eml').read_bytes())
+
 def case_materials(case):return read_materials(ROOT/'var/uploads'/case['id'])
 
 @app.get('/api/cases/{id}/materials')
@@ -264,7 +318,12 @@ async def propose_candidates(id:str,change:Change,adapter=Depends(get_adapter)):
     if change.revision!=case['revision']:raise HTTPException(409,'工作单已更新')
     content=case_materials(case)
     consent=change.values.get('remote_consent') is True
-    try:result=await propose(case,content,change.values.get('mode','model'),adapter,consent or synthetic_remote_allowed(content,ROOT))
+    try:
+        mode=change.values.get('mode','model')
+        if mode=='model':
+            material_policy.check_remote_materials(content,ROOT)
+            ACCOUNTS.reserve_demo_call()
+        result=await propose(case,content,mode,adapter,consent or synthetic_remote_allowed(content,ROOT))
     except ValueError as e:raise HTTPException(422,str(e))
     if 'id' not in result:return {'case':view(case),'extraction':result}
     updated=store_batch(id,change,content,result,consent)
@@ -281,7 +340,6 @@ def review_candidate(id:str,batch_id:str,candidate_id:str,change:Change):
             if not isinstance(values.get('reason'),str) or not values['reason'].strip():raise ValueError('请记录拒绝理由')
             clarifications.record_rejection(case,batch,candidate,values)
             candidate.update(status='rejected',review={'reason':values['reason']})
-            # Rejecting a stale batch does not refresh its other pending candidates.
             if batch['expected_revision']==case['revision']:batch['expected_revision']=case['revision']+1
             if all(c['status']!='pending' for c in batch['candidates']):batch['status']='reviewed'
             event(case,'candidate_reject',{'candidate':candidate_id,'reason':values['reason']})
@@ -504,18 +562,22 @@ def get_agent_session():
     s=ModelSettings.from_env()
     return agent.ModelSession(ModelSettings.routes()) if s.configured and s.enabled else None
 
-def official_material(content):
-    """Official samples stay on this machine; consent does not change that."""
-    folder=ROOT/'data/raw/official-rfq'
-    known={hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob('*') if p.is_file()} if folder.is_dir() else set()
-    return any(f['sha256'] in known for f in content['files'])
-
 class CaseWorkspace:
     def __init__(self,id,adapter):self.id=id;self.adapter=adapter
     def case(self):
         with connection() as c:return load(c,self.id)
     def content(self,case):return case_materials(case)
     def history(self):return matrixone.report(self.id)
+    def reference(self, name, args):
+        try:store=references.References(ROOT)
+        except ValueError:
+            if name!='search_rules':raise
+            rules=agent.search_rules(args.get('query',''))['rules']
+            return {'method':'内置规则 / 合成检索索引未安装','records':[{'id':f'RULE-{i+1}','description':r['title'],'text':r['text'],'source':r['source']} for i,r in enumerate(rules)],'warnings':['使用现有规则查询回退']}
+        if name=='lookup_stock':return store.stock(str(args.get('part','')),str(args.get('condition','')),str(args.get('unit','')),str(args.get('quantity','')))
+        if name=='historical_quotes':return store.history(str(args.get('part','')),str(args.get('condition','')),str(args.get('unit','')),str(args.get('currency','')),str(args.get('quantity','')))
+        if name=='find_alternatives':return store.alternatives(str(args.get('part','')))
+        return store.search('rule' if name=='search_rules' else 'stock',str(args.get('query','')),rerank=os.getenv('RFQ_REFERENCE_RERANK')=='1')
     def add_mail(self,text):
         case=self.case();data=text.encode()
         if any(f['sha256']==hashlib.sha256(data).hexdigest() for f in case_materials(case)['files']):raise ValueError('这封邮件已经在工作单里')
@@ -538,6 +600,77 @@ class CaseWorkspace:
 
 # What a running turn is doing, so the page can say it while the person waits. Lost on restart, which only ends the display.
 AGENT_PROGRESS={}
+
+class GlobalWorkspace:
+    """工作区首页的会话：不绑定某一张工作单，只汇总待办与只读参考。"""
+    system = agent.HOME_SYSTEM
+
+    def __init__(self,owner,adapter=None):
+        self.owner=owner;self.adapter=adapter
+
+    def case_rows(self):
+        with connection() as c:
+            rows=(c.execute('SELECT body FROM cases WHERE id IN (SELECT case_id FROM case_owners WHERE visitor=?) ORDER BY rowid DESC',(self.owner,))
+                  if SCOPED or accounts.enabled() else c.execute('SELECT body FROM cases ORDER BY rowid DESC'))
+            return [json.loads(b) for (b,) in rows]
+
+    def overview(self):
+        mails=inbox.Inbox(connection,ROOT,self.owner).listing()
+        routed=[m for m in mails if m.get('case_id')]
+        judged=[m for m in mails if m.get('manual') or m.get('decision')]
+        unrouted=[m for m in mails if not (m.get('manual') or m.get('decision'))]
+        need_review=[m for m in judged if not m.get('manual') and (m.get('decision') or {}).get('needs_review')]
+        by_category={}
+        for m in judged:
+            key=(m.get('manual') or m.get('decision') or {}).get('category')
+            if key:by_category[key]=by_category.get(key,0)+1
+        cases=[]
+        for case in self.case_rows():
+            counts=progress(case)
+            cases.append({'id':case['id'],'title':case['title'],'revision':case['revision'],**counts,'next':agent.next_step(case)})
+        todo=[]
+        if unrouted:todo.append({'kind':'mail_unrouted','count':len(unrouted),'text':f'{len(unrouted)} 封邮件还没分流'})
+        if need_review:todo.append({'kind':'mail_review','count':len(need_review),'text':f'{len(need_review)} 封分流结果需人工确认'})
+        candidates=sum(c['pending_candidates'] for c in cases)
+        if candidates:todo.append({'kind':'candidates','count':candidates,'text':f'{candidates} 条候选待审'})
+        unpriced=sum(c['issue_rows'] for c in cases)
+        if unpriced:todo.append({'kind':'issue_rows','count':unpriced,'text':f'{unpriced} 行待核对或核价'})
+        waiting=sum(1 for c in cases if c['active'] and c['approved']<c['active'])
+        if waiting:todo.append({'kind':'approve','count':waiting,'text':f'{waiting} 张工作单待批准'})
+        clarifications_open=sum(c['all_open_clarifications'] for c in cases)
+        if clarifications_open:todo.append({'kind':'clarify','count':clarifications_open,'text':f'{clarifications_open} 项澄清未解决'})
+        return {'today':datetime.now().date().isoformat(),'mails':{'total':len(mails),'routed':len(routed),'unrouted':len(unrouted),
+                'need_review':len(need_review),'by_category':by_category},'cases':cases[:12],'todo':todo,
+                'note':'数字来自当前账号的收件箱与工作单；邮件正文不在这里返回'}
+
+    def mails(self,category='',limit='8'):
+        try:limit=max(1,min(20,int(limit)))
+        except (TypeError,ValueError):limit=8
+        rows=inbox.Inbox(connection,ROOT,self.owner).listing()
+        picked=[]
+        for m in rows:
+            decision=(m.get('manual') or m.get('decision') or {})
+            label=decision.get('category') or 'unrouted'
+            if category and label!=category:continue
+            picked.append({'id':m['id'],'subject':m['subject'],'sender':m['sender'],'revision':m['revision'],
+                           'category':label,'needs_review':bool(not m.get('manual') and (m.get('decision') or {}).get('needs_review')),
+                           'provider':decision.get('provider'),'case_id':m.get('case_id')})
+            if len(picked)>=limit:break
+        return {'category':category or 'all','mails':picked,'total':len(rows),'note':'只给摘要；正文与改判请到收件箱操作'}
+
+    def reference(self,name,args):
+        store=references.References(ROOT)
+        if name=='lookup_stock':return store.stock(str(args.get('part','')),str(args.get('condition','')),str(args.get('unit','')),str(args.get('quantity','')))
+        if name=='historical_quotes':return store.history(str(args.get('part','')),str(args.get('condition','')),str(args.get('unit','')),str(args.get('currency','')),str(args.get('quantity','')))
+        if name=='find_alternatives':return store.alternatives(str(args.get('part','')))
+        kind='stock' if name=='search_parts' else 'rule'
+        return store.search(kind,str(args.get('query','')),rerank=os.getenv('RFQ_REFERENCE_RERANK')=='1')
+
+    def case(self):raise ValueError('当前对话不在某张工作单里')
+    def content(self,case):raise ValueError('当前对话不在某张工作单里')
+    def history(self):raise ValueError('当前对话不在某张工作单里')
+    def extract(self):raise ValueError('请先打开一张工作单')
+    def add_mail(self,text):raise ValueError('请先在收件箱或工作单里导入原件')
 
 def agent_turns(id):
     with connection() as c:return [json.loads(b) for (b,) in c.execute('SELECT body FROM agent_turns WHERE case_id=? ORDER BY seq',(id,))]
@@ -571,12 +704,16 @@ async def agent_turn(id:str,body:AgentMessage,session=Depends(get_agent_session)
     if session is None:raise HTTPException(409,'模型未启用，询价 Agent 不可用；工作单其余功能不受影响')
     with connection() as c:case=load(c,id)
     content=case_materials(case)
-    if official_material(content):raise HTTPException(422,'这张工作单含本地官方素材，不发送给模型')
-    # A sample's own text needs no consent, but something long typed into it may be a real mail.
-    if not (body.consent or (synthetic_remote_allowed(content,ROOT) and len(body.message)<=AGENT_SHORT_QUESTION)):raise HTTPException(422,'请先同意把本工作单内容发送给模型服务')
+    try:material_policy.check_remote_materials(content,ROOT)
+    except ValueError as e:raise HTTPException(422,str(e))
+    # 合成样例已核过可外发，不必再勾；真实材料仍要用户显式同意。
+    if not (body.consent or synthetic_remote_allowed(content,ROOT)):raise HTTPException(422,'请先同意把本工作单内容发送给模型服务')
     original=any(body.message.strip()==f.read_text(encoding='utf-8',errors='replace').strip() for f in (ROOT/'var/uploads'/id).glob('*.txt'))
+    demo=bool(accounts.USER.get() and accounts.USER.get()['role']=='demo')
+    if demo and len(body.message)>600:raise HTTPException(422,'体验提问限600字；请围绕合成询价提问')
+    ACCOUNTS.reserve_demo_call()
     AGENT_PROGRESS[id]=[]
-    try:result=await agent.run_turn(CaseWorkspace(id,adapter),body.message,agent_turns(id),session,can_add_mail=not original,on_step=AGENT_PROGRESS[id].append)
+    try:result=await agent.run_turn(CaseWorkspace(id,adapter),body.message,agent_turns(id),session,can_add_mail=not original and not demo,on_step=AGENT_PROGRESS[id].append)
     except ValueError as e:raise HTTPException(422,str(e))
     except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试；工作单没有变化')
     finally:AGENT_PROGRESS.pop(id,None)
@@ -587,3 +724,82 @@ async def agent_turn(id:str,body:AgentMessage,session=Depends(get_agent_session)
         seq=c.execute('SELECT COUNT(*) FROM agent_turns WHERE case_id=?',(id,)).fetchone()[0]
     matrixone.remember_turn(id,seq,case['revision'],turn)
     return {'turn':turn,'case':view(case)}
+
+class HomeMessage(BaseModel):
+    message:str
+    consent:bool=False
+
+
+def home_turns():
+    owner=VISITOR.get()
+    with connection() as c:
+        c.execute('CREATE TABLE IF NOT EXISTS agent_home_turns (owner TEXT,seq INTEGER PRIMARY KEY AUTOINCREMENT,body TEXT)')
+        rows=c.execute('SELECT body FROM agent_home_turns WHERE owner=? ORDER BY seq',(owner,)).fetchall()
+    return [json.loads(b) for (b,) in rows]
+
+
+@app.get('/api/agent/overview')
+def agent_overview():
+    return GlobalWorkspace(VISITOR.get()).overview()
+
+
+@app.get('/api/agent/home')
+def agent_home_turns():
+    return {'turns':home_turns()}
+
+
+@app.post('/api/agent/home')
+async def agent_home_turn(body:HomeMessage,session=Depends(get_agent_session)):
+    if session is None:raise HTTPException(409,'模型未启用，可以先看收件箱与工作单列表')
+    if not body.message.strip():raise HTTPException(422,'请输入内容')
+    if len(body.message)>600:raise HTTPException(422,'首页提问限600字')
+    if not body.consent and len(body.message)>AGENT_SHORT_QUESTION:raise HTTPException(422,'请先同意把问题发送给模型服务')
+    ACCOUNTS.reserve_demo_call()
+    try:result=await agent.run_turn(GlobalWorkspace(VISITOR.get()),body.message,home_turns(),session,can_add_mail=False)
+    except ValueError as e:raise HTTPException(422,str(e))
+    except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试')
+    turn={'message':body.message,'at':datetime.now().isoformat(timespec='seconds'),**result}
+    with connection() as c:
+        c.execute('CREATE TABLE IF NOT EXISTS agent_home_turns (owner TEXT,seq INTEGER PRIMARY KEY AUTOINCREMENT,body TEXT)')
+        c.execute('INSERT INTO agent_home_turns (owner,body) VALUES (?,?)',(VISITOR.get(),json.dumps(turn,ensure_ascii=False)))
+    return {'turn':turn}
+
+
+
+class ReferenceQuery(BaseModel):
+    kind:str=Field(max_length=20)
+    query:str=Field(max_length=300)
+    condition:str=Field(default='',max_length=30)
+    unit:str=Field(default='',max_length=30)
+    currency:str=Field(default='',max_length=10)
+    quantity:str=Field(default='',max_length=30)
+    semantic:bool=False
+    rerank:bool=False
+    consent:bool=False
+
+
+@app.get('/api/references/status')
+def reference_status():
+    return references.References(ROOT).status()
+
+
+@app.post('/api/references/query')
+def reference_query(body:ReferenceQuery):
+    store=references.References(ROOT)
+    try:
+        if not body.query.strip():raise ValueError('请填写件号或检索词')
+        if body.kind=='stock':return store.stock(body.query,body.condition,body.unit,body.quantity)
+        if body.kind=='quote':return store.history(body.query,body.condition,body.unit,body.currency,body.quantity)
+        if body.kind=='alternative':return store.alternatives(body.query)
+        if body.kind not in ('parts','rule'):raise ValueError('参考查询类型无效')
+        remote=body.semantic and os.getenv('RFQ_ENABLE_MODEL_REQUESTS')=='1' and bool(store.vectors())
+        if remote:
+            if not body.consent:raise ValueError('语义检索会发送本次检索词给模型，请先确认同意')
+            ACCOUNTS.reserve_demo_call()
+        return store.search('stock' if body.kind=='parts' else 'rule',body.query,body.semantic,body.rerank)
+    except ValueError as e:raise HTTPException(422,str(e))
+
+
+app.include_router(inbox.router(connection,lambda:ROOT,lambda:VISITOR.get(),
+    lambda:accounts.actor_label(accounts.USER.get()) if accounts.USER.get() else '本地访客',
+    import_bytes,append_file,owns,ACCOUNTS.reserve_demo_call))

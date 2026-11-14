@@ -1,4 +1,4 @@
-/* RFQ Desk shell: queue → workbench → source. The API response is the only business state; this file owns view state, request ownership and unsaved input. */
+/* RFQ Desk shell: queue → workbench → source. This file owns view state, request ownership and unsaved input. */
 const engineName=e=>({http_model:'模型提议',offline_label_rules:'离线标签规则'}[e]||e);
 const fieldNames={rfq:'询价号',part:'件号',description:'描述',quantity:'数量',unit:'单位',condition:'件状',due:'截止日期',requirements:'特殊要求',priority:'优先级'};
 const monoFields=new Set(['rfq','part','quantity','unit','condition','due']);
@@ -10,12 +10,14 @@ const tail=id=>String(id||'').slice(-6);
 const today=()=>new Date().toLocaleDateString('en-CA');
 const narrow=()=>matchMedia('(max-width: 900px)').matches;
 
-let current=null,caseList=[],focus=null,queueMode='todo',rowFilter='all',srcField=null,srcFile=null;
+let current=null,caseList=[],listLoading=true,listError='',focus=null,queueMode='todo',rowFilter='all',srcField=null,srcFile=null;
 let materials={caseId:null,revision:-1,files:[],error:''};
 const interaction=new RfqInteraction();
 const rowDrafts=new Map(),pendingRowValues=new Map(),priceDrafts=new Map();
 let browserStorage=null;try{browserStorage=window.localStorage}catch{}
-const localDrafts=new RfqDraftStore(browserStorage);
+const authState={required:false,user:null,csrf:null};
+let storageNamespace='';
+let localDrafts=new RfqDraftStore(null);
 let listRequest=0,materialRequest=0,recoverySelection=null,recoveryRequest=0;
 const draftKey=(id,row)=>id+':'+row;
 
@@ -23,7 +25,7 @@ const draftKey=(id,row)=>id+':'+row;
    Any workbench control with data-keep survives re-render, server refreshes and focus switches.
    Keys are per case and per focus; names starting with "g:" are per case only (e.g. the approver). */
 let tabStorage=null;try{tabStorage=window.sessionStorage}catch{}
-const kept=new RfqFormMemory(tabStorage,()=>localDrafts.syncPolicy(),()=>current);
+let kept=new RfqFormMemory(null,()=>localDrafts.syncPolicy(),()=>current);
 const focusKey=()=>focus?focus.type+':'+(focus.id||''):'none';
 const keepKey=name=>current.id+'|'+(name.startsWith('g:')?'g':focusKey())+'|'+name;
 function rememberInput(e){const el=e.target.closest?.('[data-keep]');if(!el||!current)return;kept.set(keepKey(el.dataset.keep),el.type==='checkbox'?el.checked:el.value);renderLocalDraftStatus()}
@@ -38,7 +40,7 @@ function notice(text,tone=false){const n=$('notice');n.textContent=text;n.classN
 async function request(path,options={}){
   if(apiConfigError)throw Error(apiConfigError+'；请检查config.js，本次未发送请求。');
   let r;
-  try{r=await fetch(API+path,options)}catch{const e=Error('无法连接本地 API（'+API+'）。请确认服务已启动；本次操作结果未知，请刷新后核对。');e.network=true;throw e}
+  try{r=await accountFetch(path,options)}catch{const e=Error('无法连接 API，请确认服务可用；本次操作结果未知，请刷新后核对。');e.network=true;throw e}
   if(!r.ok){let detail;try{const body=await r.json();detail=typeof body.detail==='string'?body.detail:JSON.stringify(body.detail)}catch{detail='HTTP '+r.status}const e=Error(detail);e.status=r.status;throw e}
   return r.json();
 }
@@ -49,7 +51,7 @@ function activity(ctx,message,error=false){
   const text=document.createElement('p');text.textContent=`${ctx.title||'工作单'} · 尾码 ${tail(ctx.caseId)||'新导入'} — ${message}`;p.append(text);
   if(ctx.caseId){const b=document.createElement('button');b.type='button';b.className='btn btn-sm';b.textContent='打开对应工作单';b.onclick=()=>{toggleActivity(false);run(()=>openCase(ctx.caseId))};p.append(b)}
   $('taskActivity').prepend(p);activityCount++;$('activityCount').hidden=false;$('activityCount').textContent=activityCount;
-  if(error)notice('后台操作失败（详见“回报”）：'+message,true);
+  if(error)notice('后台操作失败（详见“操作记录”）：'+message,true);
 }
 function toggleActivity(open=$('activityPanel').hidden){$('activityPanel').hidden=!open;$('activityBtn').setAttribute('aria-expanded',String(open));if(open){activityCount=0;$('activityCount').hidden=true}}
 $('activityBtn').onclick=e=>{e.stopPropagation();toggleActivity()};
@@ -63,24 +65,72 @@ async function openCase(id){
   try{const c=await request('/cases/'+encodeURIComponent(id));if(interaction.canDisplayNavigation(ctx,current,c)){show(c);notice('已打开 '+c.title+'（尾码 '+tail(c.id)+'），请核对当前版本。');closeDrawer();return c}}
   catch(e){if(interaction.navigationActive(ctx)){interaction.navigate(current?.id||null);notice('无法打开工作单 '+tail(id)+'：'+e.message,true)}}
 }
-async function refreshList(){const requestId=++listRequest;const list=await request('/cases');if(requestId!==listRequest)return;caseList=list;renderCaseLists()}
-function caseButtons(filter,cls){const q=filter.trim().toLowerCase();return caseList.filter(c=>(c.title+' '+c.id).toLowerCase().includes(q)).map(c=>`<button type="button" role="listitem" data-case="${esc(c.id)}" class="${cls}${c.id===current?.id?' current':''}"><b>${esc(c.title)}</b><span class="mono">…${esc(tail(c.id))} · 版本 ${c.revision}</span><span>${esc(RfqUiState.progressText(c))}</span><small>下一步：${esc(RfqUiState.nextStep(c))}</small></button>`).join('')||'<p class="hint">没有匹配的工作单。请导入自己的询价原件，或打开明确标记的合成演示。</p>'}
+async function refreshList(){
+  const requestId=++listRequest;listLoading=true;listError='';renderCaseLists();
+  try{const list=await request('/cases');if(requestId!==listRequest)return false;caseList=list;return true}
+  catch(e){if(requestId===listRequest){listError=e.message;notice('工作单列表读取失败：'+e.message,true)}return false}
+  finally{if(requestId===listRequest){listLoading=false;renderCaseLists()}}
+}
+function caseTodo(c){
+  if(c.pending_candidates)return `${c.pending_candidates} 条候选待审`;
+  if(c.pending_parse_review)return '核查解析警告';
+  if(c.open_clarifications)return `${c.open_clarifications} 项澄清未解决`;
+  if(c.issue_rows)return `${c.issue_rows} 行待核对或核价`;
+  if(c.active&&c.approved===c.active)return '报价可输出';
+  if(c.active)return '等待人工批准';
+  return '核对询价原件';
+}
+function caseButtons(filter,cls){
+  const q=filter.trim().toLowerCase();
+  if(listLoading)return '<div class="list-empty loading-empty"><b>正在读取工作单…</b></div>';
+  if(listError)return `<div class="list-empty"><b>工作单读取失败</b><p>${esc(listError)}</p><button type="button" class="btn" data-retry-cases>重新读取</button></div>`;
+  return caseList.filter(c=>(c.title+' '+c.id).toLowerCase().includes(q)).map(c=>{
+    const pending=Number(c.issue_rows||0)+Number(c.open_clarifications||0)+Number(c.pending_candidates||0)+(c.pending_parse_review?1:0);
+    return `<button type="button" role="listitem" data-case="${esc(c.id)}" class="${cls}${c.id===current?.id?' current':''}"><span class="case-main"><b title="${esc(c.title)}">${esc(c.title)}</b><span class="case-meta"><span>尾码 ${esc(tail(c.id))}</span>${pending?`<span class="case-pending">${pending} 项待处理</span>`:'<span>无待处理事项</span>'}</span></span><span class="case-state"><b>${esc(caseTodo(c))}</b><small>${esc(RfqUiState.nextStep(c))}</small></span><span class="case-version"><span>r${c.revision}</span><span>${Number(c.active||0)} 行 · ${Number(c.approved||0)} 已批准</span></span></button>`;
+  }).join('')||`<div class="list-empty"><b>${q?'没有符合筛选的工作单':'还没有工作单'}</b><p>${q?'换一个文件名或编号试试。':'从本页右上角导入询价文件开始。'}</p></div>`;
+}
 function renderCaseLists(){
   $('cases').innerHTML=caseButtons($('caseFilter').value,'case-item');
   $('landingCases').innerHTML=caseButtons($('landingFilter').value,'case-card');
   document.querySelectorAll('[data-case]').forEach(b=>b.onclick=()=>run(()=>openCase(b.dataset.case)));
+  document.querySelectorAll('[data-retry-cases]').forEach(b=>b.onclick=()=>run(refreshList));
 }
 $('caseFilter').oninput=$('landingFilter').oninput=renderCaseLists;
 
+function showHome(){
+  // 工作区首页：Agent 说话，列表与收件箱都在入口里。
+  if(window.resetOnsiteHome)window.resetOnsiteHome();
+  interaction.navigate(null);current=null;focus=null;srcField=null;srcFile=null;closeSource();closeDrawer();
+  $('agentHome').hidden=false;$('landing').hidden=true;$('desk').hidden=true;
+  $('mobileNav').hidden=true;$('srcToggle').hidden=true;$('refreshCase').hidden=true;
+  $('caseEyebrow').textContent='工作区';$('title').textContent='工作区';$('title').removeAttribute('title');$('version').textContent='';notice('');
+  history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 航材询报价工作台';
+  if(window.renderAgentHome)window.renderAgentHome();
+  renderCaseLists();run(refreshList);
+}
+function showCases(){
+  // 工作单列表（原 landing）：从首页入口进来。
+  if(window.resetOnsiteHome)window.resetOnsiteHome();
+  interaction.navigate(null);current=null;focus=null;srcField=null;srcFile=null;closeSource();closeDrawer();
+  $('agentHome').hidden=true;$('landing').hidden=false;$('desk').hidden=true;
+  $('mobileNav').hidden=true;$('srcToggle').hidden=true;$('refreshCase').hidden=true;
+  $('caseEyebrow').textContent='我的工作区';$('title').textContent='我的工作单';$('title').removeAttribute('title');$('version').textContent='';notice('');
+  history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 航材询报价工作台';
+  renderCaseLists();run(refreshList);
+}
+window.showCases=showCases;
+$('homeBtn').onclick=showHome;
+$('refreshCase').onclick=()=>{if(current)run(()=>openCase(current.id))};
 function show(c){
   const switched=current?.id!==c.id;
   current=c;
   restorePriceDraft(c);
   if(switched){focus=null;srcField=null;srcFile=null;queueMode='todo';rowFilter='all'}
-  $('landing').hidden=true;$('desk').hidden=false;$('mobileNav').hidden=false;$('srcToggle').hidden=false;
+  $('agentHome').hidden=true;$('landing').hidden=true;$('desk').hidden=false;$('mobileNav').hidden=false;$('srcToggle').hidden=false;$('refreshCase').hidden=false;
   const desk=$('desk');desk.dataset.caseId=c.id;desk.dataset.revision=c.revision;desk.dataset.priceVersion=c.price_version;
-  $('caseEyebrow').textContent='工作单 · 尾码 '+tail(c.id);$('title').textContent=c.title;
-  $('version').innerHTML=`工作版本 <b class="mono" id="revNo">${c.revision}</b> · 价表 <b class="mono">v${c.price_version}</b>`;
+  $('caseEyebrow').textContent='工作单 · 尾码 '+tail(c.id);$('title').textContent=c.title;$('title').title=c.title;
+  $('version').innerHTML=`第 <b class="mono" id="revNo">${c.revision}</b> 版<span>价表 <b class="mono">v${c.price_version}</b></span>`;
+  document.title=c.title+' · RFQ Desk';
   if(location.hash!=='#'+c.id)history.replaceState(null,'','#'+c.id);
   if(!focusValid())focus=firstFocus();
   render();renderCaseLists();refreshMaterials(c);renderLocalDraftStatus();
@@ -157,7 +207,7 @@ function focusValid(){
 }
 function setFocus(type,id='',opts={}){
   focus={type,id};if(!opts.keepField)srcField=null;srcFile=null;
-  renderQueue();renderWork();renderSource();
+  renderGates();renderQueue();renderWork();renderSource();
   if(narrow())setView('work');
   if(!opts.noScroll)$('work').scrollTo({top:0});
 }
@@ -165,20 +215,28 @@ function nextFocus(){const items=queueItems().filter(i=>i.tone!=='off'),i=items.
 
 /* ---------- render ---------- */
 function render(){if(!current)return;renderGates();renderQueue();renderWork();renderSource()}
-const gateDefs=[['content','内容'],['clarify','澄清'],['price','核价'],['approve','批准'],['output','输出']];
+const gateDefs=[['content','核对'],['clarify','澄清'],['price','核价'],['approve','批准'],['output','报价单']];
 function renderGates(){
   const {groups,s}=buildQueue(current),by=Object.fromEntries(groups.map(g=>[g.key,g]));
-  const count={content:s.content.length+(s.needsReview?1:0),clarify:s.openQs.length,price:s.priced.length,approve:s.ready?0:s.active.length-s.approved.length,output:0};
-  $('gates').innerHTML=gateDefs.map(([k,l])=>{const g=by[k],done=k==='output'?s.ready:k==='content'?!count.content:g.done;return `<li><button type="button" data-gate="${k}" class="gate ${done?'done':count[k]?'open':'idle'}"><span>${l}</span><b class="mono">${done?'✓':count[k]||'·'}</b></button></li>`}).join('');
-  document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>{queueMode='todo';const g=groups.find(g=>g.key===b.dataset.gate||(b.dataset.gate==='content'&&g.key==='warn'&&g.items.length));const item=g?.items[0];if(item)setFocus(item.type,item.id);else{renderQueue();if(narrow())setView('queue')}document.querySelector(`[data-group="${b.dataset.gate}"]`)?.scrollIntoView({block:'nearest'})});
+  const count={content:s.content.length+s.cands.length+(s.needsReview?1:0),clarify:s.openQs.length,price:s.priced.length,approve:s.ready?0:s.active.length-s.approved.length,output:0};
+  const active={warnings:'content',row:'content',cand:'content',materials:'content',q:'clarify',clarifications:'clarify',prices:'price',price:'price',approve:'approve',output:'output'}[focus?.type];
+  $('gates').innerHTML=gateDefs.map(([k,l])=>{const g=by[k],done=k==='output'?s.ready:k==='content'?Boolean(s.active.length&&!count.content):k==='price'?Boolean(s.active.length&&g.done):g.done;return `<li><button type="button" data-gate="${k}" aria-current="${k===active?'page':'false'}" class="gate ${done?'done':count[k]?'open':'idle'}"><span>${l}</span>${done||count[k]?`<b>${done?'✓':count[k]}</b>`:''}</button></li>`}).join('');
+  document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>{
+    queueMode='todo';const key=b.dataset.gate,g=groups.find(g=>g.key===key||(key==='content'&&g.key==='warn'&&g.items.length)),item=g?.items[0];
+    if(item)setFocus(item.type,item.id);
+    else if(key==='content'){const row=current.rows.find(r=>!r.excluded);setFocus(row?'row':'materials',row?.id||'')}
+    else{const target={clarify:['clarifications',''],price:['prices',''],approve:['approve','a'],output:['output','o']}[key];setFocus(...target)}
+    document.querySelector(`[data-group="${key}"]`)?.scrollIntoView({block:'nearest'});
+  });
   $('mqCount').textContent=s.issues.length+s.openQs.length?` ${s.issues.length+s.openQs.length}`:'';
 }
 const nextVerb={warnings:'核查解析警告',row:'核对询价行',q:'处理澄清',cand:'审阅修订候选',price:'补价格依据',approve:'批准当前版本',output:'输出报价响应'};
 function renderNextCard(){
   const {groups,s}=buildQueue(current),live=groups.flatMap(g=>g.items).filter(i=>i.tone!=='off'),n=live[0];
-  const here=n&&focus?.type===n.type&&focus?.id===n.id,blocked=s.issues.length+(s.needsReview?1:0);
+  const here=n&&focus?.type===n.type&&focus?.id===n.id;
   $('nextCard').className='next-card'+(s.ready?' done':'');
-  $('nextCard').innerHTML=(n?`<span class="eyebrow">下一步</span><b>${esc(nextVerb[n.type]||'处理')}</b><span class="next-what ${n.mono?'mono':''}">${esc(n.title)}</span><small>${esc(n.sub)}</small>${here?'<span class="next-here">正在处理 ↓</span>':`<button type="button" class="btn btn-primary btn-sm" id="nextGo">去处理 →</button>`}${blocked?`<small class="next-block">本单有 ${s.issues.length} 行异常${s.needsReview?'、解析待核查':''}，通过核验后才能批准</small>`:''}`:'<span class="eyebrow">下一步</span><b>没有待处理事项</b>')+`<small class="case-progress">${esc(RfqUiState.progressText(current.progress||{}))}</small>`;
+  const verb=n&&(nextVerb[n.type]||'处理');
+  $('nextCard').innerHTML=n?`<span class="next-label">${here?'当前事项':'下一步'}</span><b>${esc(verb)}</b>${n.title!==verb?`<span class="next-what" title="${esc(n.title)}">${esc(n.title)}</span>`:''}${!here?'<button type="button" class="text-btn" id="nextGo">打开此项 →</button>':''}`:'<span class="next-label">当前状态</span><b>没有待处理事项</b>';
   if($('nextGo'))$('nextGo').onclick=()=>setFocus(n.type,n.id);
 }
 function renderQueue(){
@@ -194,26 +252,29 @@ function renderQueue(){
     if(seen.has(key))duplicateIds.push(r.id);else seen.add(key);
   }
   const batchTools=(expiredIds.length?`<button type="button" class="btn btn-sm" id="batchDue">统一修改已过期行的截止日期</button>`:'')+(duplicateIds.length?`<button type="button" class="btn btn-sm" id="batchDuplicates">每组完全重复只保留首行</button>`:'');
-  $('queue').innerHTML=(batchTools?`<div class="row-tools">${batchTools}</div>`:'')+groups.map(g=>`<section class="q-group${g.done?' done':''}" data-group="${g.key}"><h3><span>${g.title}</span><small>${g.done?'✓ 已通过':g.items.length}</small></h3>${g.items.map(i=>`<button type="button" class="q-item tone-${i.tone}${isFocus(i)?' current':''}" data-qtype="${i.type}" data-qid="${esc(i.id)}"><b class="${i.mono?'mono':''}">${esc(i.title)}</b><small>${esc(i.sub)}</small></button>`).join('')}</section>`).join('');
+  $('queue').innerHTML=(batchTools?`<div class="row-tools">${batchTools}</div>`:'')+groups.filter(g=>g.items.length).map(g=>`<section class="q-group${g.done?' done':''}" data-group="${g.key}"><h3><span>${g.title}</span><small>${g.items.length}</small></h3>${g.items.map(i=>`<button type="button" class="q-item tone-${i.tone}${isFocus(i)?' current':''}" data-qtype="${i.type}" data-qid="${esc(i.id)}"><b class="${i.mono?'mono':''}">${esc(i.title)}</b><small>${esc(i.sub)}</small></button>`).join('')}</section>`).join('');
   if(expiredIds.length)$('batchDue').onclick=()=>run(async()=>{
     const ids=expiredIds;
-    const due=prompt(`将 ${ids.length} 行截止日期改为（YYYY-MM-DD）`);
-    if(due===null)return;
-    const reason=prompt('填写统一裁定理由');
-    if(reason===null)return;
+    const answer=await RfqDialog.ask({title:'统一修改截止日期',body:`将对 ${ids.length} 行已过期行写入同一新截止日期，并记录本次裁定理由。`,ok:'保存裁定',fields:[
+      {name:'due',label:'新截止日期（YYYY-MM-DD）',placeholder:'2026-12-31',maxlength:10,required:true,pattern:'^\\d{4}-\\d{2}-\\d{2}$',patternError:'请按 YYYY-MM-DD 填写'},
+      {name:'reason',label:'统一裁定理由',type:'textarea',maxlength:500,required:true,missing:'请填写统一裁定理由'}
+    ]});
+    if(!answer)return;
     await request(`/cases/${current.id}/rows`,{
       method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({revision:current.revision,values:{row_ids:ids,due,reason}})
+      body:JSON.stringify({revision:current.revision,values:{row_ids:ids,due:answer.due,reason:answer.reason}})
     });
     await openCase(current.id);
   });
   if(duplicateIds.length)$('batchDuplicates').onclick=()=>run(async()=>{
     const ids=duplicateIds;
-    const reason=prompt(`将排除 ${ids.length} 行重复项，请填写统一裁定理由`);
-    if(reason===null)return;
+    const answer=await RfqDialog.ask({title:'排除完全重复行',body:`将排除 ${ids.length} 行与首行完全重复的记录，原件与首次出现行不变。`,ok:'排除重复行',fields:[
+      {name:'reason',label:'统一裁定理由',type:'textarea',maxlength:500,required:true}
+    ]});
+    if(!answer)return;
     await request(`/cases/${current.id}/rows`,{
       method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({revision:current.revision,values:{row_ids:ids,excluded:true,reason}})
+      body:JSON.stringify({revision:current.revision,values:{row_ids:ids,excluded:true,reason:answer.reason}})
     });
     await openCase(current.id);
   });
@@ -235,6 +296,9 @@ function renderRowList(){
 }
 
 /* ---------- source pane ---------- */
+// "MIME text / row 4" reads as "第 4 行"; sheet and page names are kept when the source has them.
+function srcShort(loc){const s=String(loc||''),page=s.match(/page\s*(\d+)/i),row=s.match(/(?:row|line)\s*(\d+)\s*$/i),sheet=s.match(/sheet\s+([^/]+?)\s*\//i);return [sheet?.[1],page&&`第 ${page[1]} 页`,row&&`第 ${row[1]} 行`].filter(Boolean).join(' · ')||s}
+function srcGutter(loc){const s=String(loc||''),n=(s.match(/(\d+)\s*$/)||[])[1],page=s.match(/page\s*(\d+)/i);if(!n)return s;return (page?'P'+page[1]+' ':'')+(/row\s*\d+\s*$/i.test(s)?'表 ':'')+n}
 function unitNumber(loc){return (String(loc).match(/(\d+)\s*$/)||[])[1]}
 function matchUnit(file,src){
   const units=file.units;let i=units.findIndex(u=>u.location===src.location);if(i>=0)return{i,how:'exact'};
@@ -247,7 +311,12 @@ function focusSources(){
   const add=(src,strong,label)=>{if(src?.file)out.push({...src,strong,label})};
   if(focus.type==='row'||focus.type==='price'){
     const r=current.rows.find(r=>r.id===focus.id);if(!r)return out;
-    for(const f of Object.keys(fieldNames))for(const s of r.field_provenance?.[f]?.sources||[])add(s,f===srcField,fieldNames[f]);
+    for(const f of Object.keys(fieldNames)){
+      if(srcField&&f!==srcField)continue;
+      const hasRaw=r.raw_fields&&f in r.raw_fields,hasValue=Boolean(r[f]||(hasRaw&&r.raw_fields[f]));if(!hasValue)continue;
+      const specific=r.field_provenance?.[f]?.sources||[],sources=specific.length?specific:(r.sources||[]);
+      for(const s of sources)add(s,f===srcField,fieldNames[f]+(specific.length?'':' · 行级'));
+    }
     if(!out.length)for(const s of r.sources)add(s,false,'行来源');
   }else if(focus.type==='q'){
     const q=current.clarifications.find(q=>q.id===focus.id);if(!q)return out;
@@ -264,7 +333,7 @@ function renderSource(){
   if(materials.caseId!==current.id){$('srcBody').innerHTML='<p class="hint pad">读取原件…</p>';$('srcFiles').innerHTML='';return}
   if(materials.error){$('srcBody').innerHTML=`<p class="msg error pad">原件读取失败：${esc(materials.error)}</p>`;return}
   if(!files.some(f=>f.file===srcFile)){const strong=marks.find(m=>m.strong),pick=strong||marks[0];const main=current.rows[0]?.sources?.[0]?.file;srcFile=(pick&&files.some(f=>f.file===pick.file))?pick.file:files.some(f=>f.file===main)?main:files[0]?.file||null}
-  $('srcFiles').innerHTML=files.map(f=>{const n=marks.filter(m=>m.file===f.file).length;return `<button type="button" role="tab" data-srcfile="${esc(f.file)}" aria-selected="${f.file===srcFile}" class="${n?'linked':''}">${esc(f.file)}${n?`<i>${n}</i>`:''}</button>`}).join('');
+  $('srcFiles').hidden=files.length<2;$('srcFiles').innerHTML=files.map(f=>{const n=marks.filter(m=>m.file===f.file).length;return `<button type="button" role="tab" data-srcfile="${esc(f.file)}" aria-selected="${f.file===srcFile}" class="${n?'linked':''}" title="${esc(f.file)}"><span>${esc(f.file)}</span>${n?`<i aria-label="${n} 处关联">${n}</i>`:''}</button>`}).join('');
   document.querySelectorAll('[data-srcfile]').forEach(b=>b.onclick=()=>{srcFile=b.dataset.srcfile;renderSource()});
   const file=files.find(f=>f.file===srcFile);
   $('srcTitle').textContent=file?file.file:'没有原件';
@@ -275,7 +344,7 @@ function renderSource(){
     const hit=matchUnit(file,m);if(!hit)continue;if(hit.how==='number')approx=true;
     const h=hits.get(hit.i)||{strong:false,labels:new Set(),quotes:new Set(),how:hit.how};h.strong||=m.strong;h.labels.add(m.label);if(m.quote)h.quotes.add(m.quote);hits.set(hit.i,h);
   }
-  const lineHtml=(u,i)=>{const h=hits.get(i);let text=esc(u.text);if(h)for(const q of h.quotes){const e=esc(q);if(e)text=text.replace(e,`<mark>${e}</mark>`)}return `<div class="src-line${h?' hit':''}${h?.strong?' strong':''}${whole?' whole':''}" data-line="${i}"><span class="loc mono">${esc(u.location)}</span><span class="txt">${text||'<i class="hint">（空行）</i>'}</span>${h?`<span class="tag">${esc([...h.labels].join(' · '))}${h.how==='number'?' · 按行号对应':''}</span>`:''}</div>`};
+  const lineHtml=(u,i)=>{const h=hits.get(i);let text=esc(u.text);if(h)for(const q of h.quotes){const e=esc(q);if(e)text=text.replace(e,`<mark>${e}</mark>`)}return `<div class="src-line${h?' hit':''}${h?.strong?' strong':''}${whole?' whole':''}" data-line="${i}"><span class="loc mono" title="${esc(u.location)}">${esc(srcGutter(u.location))}</span><span class="txt">${text||'<i class="hint">（空行）</i>'}</span>${h?`<span class="tag">${esc([...h.labels].join(' · '))}${h.how==='number'?' · 按行号对应':''}</span>`:''}</div>`};
   $('srcBody').innerHTML=`<p class="src-meta"><span class="mono">SHA-256 ${esc(file.sha256.slice(0,16))}…</span>${approx?' · 部分高亮按行号对应，请核对原文':''}${whole?' · 本文件是此问题的答复原件':''}</p>`+file.units.slice(0,800).map(lineHtml).join('')+(file.units.length>800?'<p class="hint pad">仅显示前 800 段。</p>':'');
   const target=$('srcBody').querySelector('.src-line.strong')||$('srcBody').querySelector('.src-line.hit');
   if(target)target.scrollIntoView({block:'center'});
@@ -330,10 +399,13 @@ $('restoreLocalDraft').onclick=()=>run(async()=>{
   $('localDraftDialog').close();closeDrawer();setFocus('row',record.rowId);renderLocalDraftStatus();notice('本地草稿已放入对应编辑区，尚未保存；请核对版本与差异后明确保存。');
 });
 $('deleteLocalDraft').onclick=()=>{const r=recoverySelection;if(!r)return;if(localDrafts.removeIf(r.caseId,r.rowId,r.editId)){const key=draftKey(r.caseId,r.rowId);if(rowDrafts.get(key)?.editId===r.editId)rowDrafts.delete(key);if(current?.id===r.caseId)render();recoverySelection=null;$('localDraftCompare').innerHTML='<p class="hint">此份暂存已清除，服务器数据未改变。</p>';$('restoreLocalDraft').disabled=true;$('deleteLocalDraft').disabled=true}else $('localDraftError').textContent='记录已变化或无法清除，请重新核对';renderRecoveryList()};
-$('clearLocalDrafts').onclick=()=>{if(!confirm('清除本浏览器全部暂存草稿？当前页编辑仍保留。'))return;const ok=localDrafts.clear();kept.clearPersisted();renderLocalDraftStatus();notice(ok?'本浏览器暂存已清除；当前页编辑仍保留，继续输入会再次暂存；关闭开关可停止并清除。':'未能确认清除，请查看暂存提示。',!ok)};
+$('clearLocalDrafts').onclick=()=>run(async()=>{
+  if(!await RfqDialog.confirm({title:'清除本机暂存',body:'清除本浏览器全部暂存草稿。当前页尚未保存的编辑仍保留，重新输入会再次暂存。',ok:'清除暂存',tone:'danger'}))return;
+  const ok=localDrafts.clear();kept.clearPersisted();renderLocalDraftStatus();notice(ok?'本浏览器暂存已清除；当前页编辑仍保留，继续输入会再次暂存；关闭开关可停止并清除。':'未能确认清除，请查看暂存提示。',!ok);
+});
 $('localDraftEnabled').onchange=()=>{localDrafts.setEnabled($('localDraftEnabled').checked);if(!localDrafts.enabled)kept.clearPersisted();renderLocalDraftStatus()};
 $('retryLocalDrafts').onclick=()=>{for(const [key,d] of rowDrafts){const split=key.indexOf(':');persistRowDraft(key.slice(0,split),key.slice(split+1),d)}renderLocalDraftStatus()};
-window.addEventListener('storage',e=>{if(e.key===null||e.key?.startsWith(RfqDraftStore.PREFIX)||e.key===RfqDraftStore.SETTINGS){localDrafts.syncPolicy();if(!localDrafts.enabled)kept.clearPersisted();renderLocalDraftStatus();notice(e.key===RfqDraftStore.SETTINGS||e.key===null?(localDrafts.enabled?'本浏览器暂存已明确开启；当前编辑未自动提交，可重试暂存。':localDrafts.policyMessage):'本浏览器其他页面的暂存记录有变化；当前编辑未自动替换，请核对。')}});
+window.addEventListener('storage',e=>{const key=storageNamespace&&e.key?.startsWith(storageNamespace)?e.key.slice(storageNamespace.length):e.key;if(key===null||key?.startsWith(RfqDraftStore.PREFIX)||key===RfqDraftStore.SETTINGS){localDrafts.syncPolicy();if(!localDrafts.enabled)kept.clearPersisted();renderLocalDraftStatus();notice(key===RfqDraftStore.SETTINGS||key===null?(localDrafts.enabled?'本浏览器暂存已明确开启；当前编辑未自动提交，可重试暂存。':localDrafts.policyMessage):'本浏览器其他页面的暂存记录有变化；当前编辑未自动替换，请核对。')}});
 window.addEventListener('beforeunload',e=>{if(rowDrafts.size||priceDrafts.size||kept.size){e.preventDefault();e.returnValue='有未保存修改'}});
 
 /* ---------- shared helpers for outputs ---------- */
@@ -343,30 +415,43 @@ async function fetchExport(ctx,format,operation='preview'){
   const formal=operation==='export';
   const path=formal?`/cases/${ctx.caseId}/exports`:`/cases/${ctx.caseId}/quote-preview?format=${format}&revision=${ctx.revision}`;
   const options=formal?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:ctx.revision,values:{format}})}:{};
-  let r;try{r=await fetch(API+path,options)}catch{throw Error(formal?'无法确认正式输出是否完成；请刷新并查看实录后决定是否重试。':'预览连接失败，未发出正式导出；请检查API服务后重试。')}
+  let r;try{r=await accountFetch(path,options)}catch{throw Error(formal?'无法确认正式输出是否完成；请刷新并查看实录后决定是否重试。':'预览连接失败，未发出正式导出；请检查API服务后重试。')}
   if(!r.ok){let detail='HTTP '+r.status;try{detail=(await r.json()).detail}catch{}throw Error(detail)}
   return r;
 }
 
 /* ---------- intake & boot ---------- */
 async function uploadCase(input){const f=input.files[0];if(!f)return;const data=new FormData();data.append('file',f);try{await importCase('/import',{method:'POST',body:data},`已导入 ${f.name}；左侧列出挡住报价的事项，右侧对照原件。`)}finally{input.value=''}}
-$('upload').onchange=()=>run(()=>uploadCase($('upload')));$('uploadLanding').onchange=()=>run(()=>uploadCase($('uploadLanding')));
-const demo=()=>importCase('/demo',{method:'POST'},'已导入合成演示（重复 / 冲突 / 缺价）。');
+$('upload').onchange=()=>run(()=>uploadCase($('upload')));$('uploadLanding').onchange=()=>run(()=>uploadCase($('uploadLanding')));$('uploadSide').onchange=()=>run(()=>uploadCase($('uploadSide')));
+const demo=()=>importCase('/demo',{method:'POST'},'已导入样例：重复 / 冲突 / 缺价。');
 $('demo').onclick=$('start').onclick=()=>run(demo);
-$('lifecycle').onclick=()=>run(()=>importCase('/lifecycle-demo',{method:'POST'},'合成变更演练：从两条独立询价开始，可报价、撤回价源、澄清后重新批准。'));
-$('mailDemo').onclick=()=>run(()=>importCase('/semantic-demo/mail-en',{method:'POST'},'合成邮件已导入：规则提取不到询价行，可让模型提取。'));
-$('mailRevision').onclick=()=>run(()=>importCase('/semantic-demo/mail-revision',{method:'POST'},'合成邮件已导入，可让模型提取询价行。'));
-$('mailMixed').onclick=()=>run(()=>importCase('/semantic-demo/mail-mixed',{method:'POST'},'合成邮件已导入，可让模型提取询价行。'));
-$('proseDemo').onclick=()=>run(()=>importCase('/semantic-demo/prose',{method:'POST'},'合成正文已导入，请审阅修订候选。'));
-$('revisionDemo').onclick=()=>run(()=>importCase('/semantic-demo/revision',{method:'POST'},'合成修订已导入，请审阅修订候选。'));
+$('lifecycle').onclick=()=>run(()=>importCase('/lifecycle-demo',{method:'POST'},'变更演练：从两条独立询价开始，可报价、撤回价源、澄清后重新批准。'));
+$('mailDemo').onclick=()=>run(()=>importCase('/semantic-demo/mail-en',{method:'POST'},'邮件已导入：规则提取不到询价行，可让模型提取。'));
+$('mailRevision').onclick=()=>run(()=>importCase('/semantic-demo/mail-revision',{method:'POST'},'邮件已导入，可让模型提取询价行。'));
+$('mailMixed').onclick=()=>run(()=>importCase('/semantic-demo/mail-mixed',{method:'POST'},'邮件已导入，可让模型提取询价行。'));
+$('proseDemo').onclick=()=>run(()=>importCase('/semantic-demo/prose',{method:'POST'},'正文已导入，请审阅修订候选。'));
+$('revisionDemo').onclick=()=>run(()=>importCase('/semantic-demo/revision',{method:'POST'},'修订已导入，请审阅修订候选。'));
 let modelState={};
-async function refreshModelState(){const h=modelState=await request('/health');$('mode').className='mode '+(h.requests_enabled?'on':'off');$('modeText').textContent=h.requests_enabled?`真实模型已启用${h.request_count?` · 本轮 ${h.request_count} 次`:''}`:'离线本地 · 模型未启用';$('mode').title='本轮历史连接状态；不代表持续在线。平台未接入。';$('agentTool').hidden=$('landAgent').hidden=$('tourCard').hidden=!h.requests_enabled;$('uploadLandingBtn').classList.toggle('btn-primary',!h.requests_enabled)}
+async function refreshModelState(){
+  const h=modelState=await request('/health'),enabled=Boolean(h.requests_enabled);
+  $('mode').className='mode '+(enabled?'on':'off');$('modeText').textContent=enabled?'AI 已启用':'离线模式';
+  $('mode').title=enabled?'AI 可处理邮件；结果仍需人工核对。':'模型未启用，可先导入文件并使用本地解析。';
+  $('agentEntry').hidden=$('landAgent').hidden=false;$('tourCard').hidden=false;$('tourStart').disabled=!enabled;
+  $('agentMailSend').disabled=!enabled;
+  $('mailServiceHint').textContent=enabled?'提取结果由你确认后，再进入正式询价。':'当前为离线模式，请先使用“导入询价文件”。';
+  document.querySelectorAll('[data-agent-sample]').forEach(b=>b.disabled=!enabled);
+  if(authState.user?.role==='demo')document.querySelectorAll('input[type=file]').forEach(el=>{el.disabled=true;el.closest('label')?.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')});
+}
 async function boot(){
+  if(!await initializeAccount())return;
   try{await refreshModelState()}
-  catch(e){$('mode').className='mode down';$('modeText').textContent='本地 API 未连接';notice(e.message,true);return}
+  catch(e){$('mode').className='mode down';$('modeText').textContent='API 未连接';listLoading=false;$('landingCases').innerHTML=`<div class="list-empty"><b>工作单读取失败</b><p>${esc(e.message)}</p><button type="button" class="btn" id="retryBoot">重新连接</button></div>`;$('retryBoot').onclick=()=>run(boot);notice(e.message,true);return}
   document.querySelectorAll('#mobileNav [data-view]').forEach(b=>b.setAttribute('aria-current',String(b.dataset.view===document.body.dataset.view)));
-  await refreshList();
-  const hashed=location.hash.slice(1);if(/^[a-zA-Z0-9_-]{1,64}$/.test(hashed)&&caseList.some(c=>c.id===hashed))await openCase(hashed);
+  try{if(!await refreshList())return}
+  catch(e){listLoading=false;$('landingCases').innerHTML=`<div class="list-empty"><b>工作单读取失败</b><p>${esc(e.message)}</p><button type="button" class="btn" id="retryBoot">重新读取</button></div>`;$('retryBoot').onclick=()=>run(boot);notice(e.message,true);return}
+  const hashed=location.hash.slice(1);
+  if(/^[a-zA-Z0-9_-]{1,64}$/.test(hashed)&&caseList.some(c=>c.id===hashed))await openCase(hashed);
+  else showHome();
   try{const list=await request('/official');$('official').closest('details').hidden=!list.length;$('official').innerHTML=list.length?list.map((p,i)=>`<button type="button" class="list-btn" data-official="${i}">${esc(p)}</button>`).join(''):'<p class="hint">未发现本地官方素材。</p>';document.querySelectorAll('[data-official]').forEach(b=>b.onclick=()=>run(()=>importCase('/official/'+b.dataset.official,{method:'POST'},'官方素材仅本地解析；未发送至模型。')))}catch{$('official').innerHTML='<p class="hint">本地官方素材列表读取失败。</p>'}
 }
 renderLocalDraftStatus();
