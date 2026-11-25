@@ -1,6 +1,6 @@
 from pathlib import Path
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from urllib.parse import urlsplit
 import asyncio
 import csv
@@ -11,7 +11,9 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
+import time
 import uuid
 import zlib
 from contextvars import ContextVar
@@ -24,9 +26,10 @@ from .parsing import parse_file
 from . import price_intake, clarifications, agent, matrixone, material_policy, accounts, references, inbox
 from .model_router import ROUTER
 from .quote_html import render_quote
+from .quote_export import render_quote_xlsx, render_quote_email
 from .materials import read_materials, material_files
 from .semantic import get_adapter, propose, accept_candidate, synthetic_remote_allowed
-from .domain import new_case, analyze, replace_prices, approve, export_data, event, FIELDS, ConflictError, is_case_approved, pending_candidate_batches
+from .domain import new_case, analyze, replace_prices, approve, export_data, event, FIELDS, ConflictError, is_case_approved, pending_candidate_batches, diff_snapshots
 
 ROOT = Path(__file__).resolve().parents[2]
 DB = Path(os.getenv('RFQ_DB') or str(ROOT/'var/rfq.sqlite3'))
@@ -54,6 +57,16 @@ def connection():
         c.execute('CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS agent_turns (seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, body TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS case_owners (case_id TEXT PRIMARY KEY, visitor TEXT NOT NULL)')
+        c.execute(
+            'CREATE TABLE IF NOT EXISTS case_snapshots ('
+            'case_id TEXT NOT NULL, '
+            'revision INTEGER NOT NULL, '
+            'kind TEXT NOT NULL, '
+            'actor TEXT NOT NULL, '
+            'created_at TEXT NOT NULL, '
+            'body TEXT NOT NULL, '
+            'PRIMARY KEY (case_id, revision))'
+        )
         with c:
             yield c
     finally:
@@ -172,7 +185,42 @@ async def visitor_scope(request: Request, call_next):
     if fresh: response.set_cookie('rfq_visitor', signed_cookie, max_age=30*86400, httponly=True, samesite='lax', secure=request.url.scheme=='https')
     return response
 
-app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:5311','http://localhost:5311'], allow_credentials=True, allow_methods=['GET','POST','PATCH'], allow_headers=['Content-Type','X-CSRF-Token','X-RFQ-Account'], expose_headers=['X-RFQ-Session-Changed'])
+app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:5311','http://localhost:5311'], allow_credentials=True, allow_methods=['GET','POST','PATCH','DELETE'], allow_headers=['Content-Type','X-CSRF-Token','X-RFQ-Account'], expose_headers=['X-RFQ-Session-Changed'])
+
+SNAPSHOT_KEYS = ('id', 'revision', 'rows', 'prices', 'price_version', 'warnings', 'review_note', 'materials_snapshot', 'case_approval', 'clarifications')
+
+def _current_actor(fallback=''):
+    user = accounts.USER.get()
+    if accounts.enabled() and user:
+        return accounts.actor_label(user)
+    return str(fallback or '').strip()
+
+MAX_INTERMEDIATE_SNAPSHOTS = 50
+MAX_HOME_TURNS = 200
+
+def save_snapshot(c, case, kind, actor=''):
+    snap = {k: case[k] for k in SNAPSHOT_KEYS if k in case}
+    snap.setdefault('rows', [])
+    snap.setdefault('prices', [])
+    snap.setdefault('warnings', [])
+    c.execute(
+        'INSERT OR REPLACE INTO case_snapshots (case_id, revision, kind, actor, created_at, body) VALUES (?, ?, ?, ?, ?, ?)',
+        (
+            case['id'],
+            case['revision'],
+            kind,
+            str(actor or '').strip(),
+            datetime.now(timezone.utc).isoformat(timespec='seconds'),
+            json.dumps(snap, ensure_ascii=False),
+        ),
+    )
+    c.execute(
+        "DELETE FROM case_snapshots WHERE case_id=? AND kind NOT IN ('import','approve') "
+        "AND revision NOT IN ("
+        "SELECT revision FROM case_snapshots WHERE case_id=? AND kind NOT IN ('import','approve') "
+        "ORDER BY revision DESC LIMIT ?)",
+        (case['id'], case['id'], MAX_INTERMEDIATE_SNAPSHOTS),
+    )
 
 def save(c, case):
     user = accounts.USER.get()
@@ -194,7 +242,7 @@ def view(case):
     settings=ModelSettings.from_env()
     rows=analyze(case)
     p=progress(case,rows)
-    return {**case, 'rows':rows, 'clarifications':clarifications.listing(case), 'progress':p, 'case_approved':p['case_approved'], 'mode':'model-live-local' if settings.configured and settings.enabled else 'offline-local'}
+    return {**case, 'archived':bool(case.get('archived', False)), 'rows':rows, 'clarifications':clarifications.listing(case), 'progress':p, 'case_approved':p['case_approved'], 'mode':'model-live-local' if settings.configured and settings.enabled else 'offline-local'}
 
 def progress(case,rows=None):
     rows=analyze(case) if rows is None else rows
@@ -213,7 +261,7 @@ class Change(BaseModel):
     revision: int
     values: dict
 
-def mutate(id, change, action):
+def mutate(id, change, action, kind=None, allow_archived=False):
     try:
         user = accounts.USER.get()
         if accounts.enabled() and user:
@@ -221,11 +269,23 @@ def mutate(id, change, action):
         with connection() as c:
             c.execute('BEGIN IMMEDIATE')
             case = load(c,id)
+            if case.get('archived') and not allow_archived: raise HTTPException(409,'工作单已归档，请先取消归档后再修改')
             if change.revision != case['revision']: raise HTTPException(409,'工作单已更新，请刷新后重试')
+            events_before = len(case.get('events', []))
             changed=action(case,change.values)
             if changed is False:return view(case)
             case['revision'] = max(case['revision'],change.revision+1)
             save(c,case)
+            snap_kind = kind
+            if snap_kind is None:
+                added_actions = [e.get('action') for e in case.get('events', [])[events_before:]]
+                if 'approve' in added_actions:
+                    snap_kind = 'approve'
+                elif any(a in ('price_update', 'price_import_review') for a in added_actions):
+                    snap_kind = 'prices'
+                else:
+                    snap_kind = 'edit'
+            save_snapshot(c, case, snap_kind, actor=_current_actor(change.values.get('actor', '')))
         matrixone.sync(case,analyze(case))
         return view(case)
     except ConflictError as e: raise HTTPException(409,str(e))
@@ -243,7 +303,7 @@ def health():
 def cases():
     with connection() as c:
         rows = c.execute('SELECT body FROM cases WHERE id IN (SELECT case_id FROM case_owners WHERE visitor=?) ORDER BY rowid DESC', (VISITOR.get(),)) if SCOPED or accounts.enabled() else c.execute('SELECT body FROM cases ORDER BY rowid DESC')
-        return [{'id':x['id'],'title':x['title'],'revision':x['revision'],**progress(x)} for (b,) in rows for x in [json.loads(b)]]
+        return [{'id':x['id'],'title':x['title'],'revision':x['revision'],'archived':bool(x.get('archived', False)),**progress(x)} for (b,) in rows for x in [json.loads(b)]]
 
 def import_bytes(name, data, on_import=None):
     suffix = Path(name).suffix.lower()
@@ -265,6 +325,7 @@ def import_bytes(name, data, on_import=None):
         case['materials_snapshot'] = case_materials(case)['snapshot']
         event(case,'import',{'filename':name,'rows':len(case['rows'])})
         save(c,case)
+        save_snapshot(c,case,'import',actor=_current_actor())
     matrixone.sync(case,analyze(case))
     return view(case)
 
@@ -293,6 +354,7 @@ def append_file(id,revision,name,data,on_append=None):
     except Exception: raise HTTPException(422,'文件无法解析，请检查文件格式和编码')
     with connection() as c:
         c.execute('BEGIN IMMEDIATE');case=load(c,id)
+        if case.get('archived'):raise HTTPException(409,'工作单已归档，请先取消归档后再修改')
         if revision!=case['revision']:raise HTTPException(409,'工作单已更新，请重新选择原件')
         folder=ROOT/'var/uploads'/id;folder.mkdir(parents=True,exist_ok=True)
         existing=[p for p in folder.glob('*') if p.is_file()]
@@ -306,6 +368,7 @@ def append_file(id,revision,name,data,on_append=None):
         case['revision']+=1
         event(case,'material_append',{'filename':Path(name).name,'effective_version_selected':False})
         save(c,case)
+        save_snapshot(c,case,'material',actor=_current_actor())
     matrixone.sync(case,analyze(case))
     return view(case)
 
@@ -486,6 +549,107 @@ def accept_candidate_batch(id:str,batch_id:str,change:Change):
 def get_case(id:str):
     with connection() as c: return view(load(c,id))
 
+
+def _case_diff_data(id, from_rev=None, to_rev=None):
+    with connection() as c:
+        case = load(c, id)
+        meta_rows = c.execute(
+            'SELECT revision, kind, actor, created_at FROM case_snapshots WHERE case_id=? ORDER BY revision ASC',
+            (id,),
+        ).fetchall()
+        snapshots = [{'revision': r[0], 'kind': r[1], 'actor': r[2], 'created_at': r[3]} for r in meta_rows]
+        meta_by_rev = {s['revision']: s for s in snapshots}
+        if not snapshots:
+            if from_rev is not None or to_rev is not None:
+                raise HTTPException(404, '找不到指定的版本快照')
+            return {'snapshots': [], 'default_from': None, 'current_revision': case['revision'], 'diff': None}
+        approvals = [s for s in snapshots if s['kind'] == 'approve']
+        default_from = approvals[-1]['revision'] if approvals else snapshots[0]['revision']
+        chosen_from = default_from if from_rev is None else from_rev
+        if chosen_from not in meta_by_rev:
+            raise HTTPException(404, '找不到指定的起始版本快照')
+        if to_rev is not None and to_rev not in meta_by_rev:
+            raise HTTPException(404, '找不到指定的目标版本快照')
+        needed = [chosen_from] if to_rev is None or to_rev == chosen_from else [chosen_from, to_rev]
+        placeholders = ','.join('?' for _ in needed)
+        body_rows = c.execute(
+            f'SELECT revision, body FROM case_snapshots WHERE case_id=? AND revision IN ({placeholders})',
+            (id, *needed),
+        ).fetchall()
+    bodies = {r[0]: json.loads(r[1]) for r in body_rows}
+    before_case = bodies[chosen_from]
+    from_meta = meta_by_rev[chosen_from]
+    if to_rev is None:
+        after_case = case
+        to_meta = {'kind': 'current', 'actor': '', 'created_at': ''}
+    else:
+        after_case = bodies[to_rev]
+        to_meta = meta_by_rev[to_rev]
+    diff = diff_snapshots(before_case, after_case, from_meta=from_meta, to_meta=to_meta)
+    return {
+        'snapshots': snapshots,
+        'default_from': default_from,
+        'current_revision': case['revision'],
+        'diff': diff,
+    }
+
+
+@app.get('/api/cases/{id}/diff')
+def case_diff(id: str, from_rev: int | None = None, to_rev: int | None = None):
+    return _case_diff_data(id, from_rev=from_rev, to_rev=to_rev)
+
+
+@app.patch('/api/cases/{id}/archive')
+def archive_case(id: str, change: Change):
+    def action(case, values):
+        if 'archived' not in values or not isinstance(values['archived'], bool):
+            raise ValueError('archived 必须为布尔值')
+        target = values['archived']
+        if bool(case.get('archived', False)) == target:
+            return False
+        case['archived'] = target
+        event(case, 'archive' if target else 'unarchive', {'actor': values.get('actor', ''), 'archived': target})
+    return mutate(id, change, action, kind='archive', allow_archived=True)
+
+
+@app.delete('/api/cases/{id}')
+def delete_case(id: str):
+    with connection() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if not c.execute('SELECT 1 FROM cases WHERE id=?', (id,)).fetchone():
+            raise HTTPException(404, '找不到工作单')
+        c.execute('DELETE FROM cases WHERE id=?', (id,))
+        c.execute('DELETE FROM case_owners WHERE case_id=?', (id,))
+        c.execute('DELETE FROM agent_turns WHERE case_id=?', (id,))
+        c.execute('DELETE FROM case_snapshots WHERE case_id=?', (id,))
+        inbox.Inbox.schema(c)
+        if SCOPED or accounts.enabled():
+            mail_rows = c.execute('SELECT id, owner, body FROM inbox_messages WHERE owner=?', (VISITOR.get(),)).fetchall()
+        else:
+            mail_rows = c.execute('SELECT id, owner, body FROM inbox_messages').fetchall()
+        for mid, mowner, mbody in mail_rows:
+            try:
+                mail = json.loads(mbody)
+            except json.JSONDecodeError:
+                continue
+            if mail.get('case_id') == id:
+                mail['case_id'] = None
+                mail['revision'] = int(mail.get('revision', 0)) + 1
+                c.execute(
+                    'UPDATE inbox_messages SET body=? WHERE id=? AND owner=?',
+                    (json.dumps(mail, ensure_ascii=False), mid, mowner),
+                )
+    if isinstance(id, str) and id and Path(id).name == id and id not in ('.', '..'):
+        for sub in ('var/uploads', 'var/price-imports'):
+            base = (ROOT / sub).resolve()
+            raw_target = base / id
+            if raw_target.is_symlink():
+                continue
+            target = raw_target.resolve()
+            if target.parent == base and target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+    return {'deleted': True, 'id': id}
+
 def apply_row_edit(case,row_id,values,mark_resolution=True):
     row = next((r for r in case['rows'] if r['id']==row_id),None)
     if not row: raise HTTPException(404)
@@ -547,7 +711,7 @@ def edit_rows(id:str,change:Change):
     return mutate(id,change,edit)
 
 @app.post('/api/cases/{id}/prices')
-def prices(id:str,change:Change): return mutate(id,change,lambda c,v:replace_prices(c,v.get('prices',[])))
+def prices(id:str,change:Change): return mutate(id,change,lambda c,v:replace_prices(c,v.get('prices',[])),kind='prices')
 
 def _run_price_preview(id, revision, filename, data):
     with connection() as c:case=load(c,id)
@@ -567,11 +731,11 @@ def price_accept(id:str,change:Change):
         affected=replace_prices(case,prices)
         if affected is False:affected=[]
         event(case,'price_import_review',{'preview_id':values['preview_id'],'actor':values['actor'],'reason':values['reason'],'affected':affected})
-    return mutate(id,change,action)
+    return mutate(id,change,action,kind='prices')
 
 @app.post('/api/cases/{id}/demo-prices')
 def demo_prices(id:str,change:Change):
-    return mutate(id,change,lambda c,v:replace_prices(c,json.loads((ROOT/'data/synthetic/prices.json').read_text(encoding='utf-8'))))
+    return mutate(id,change,lambda c,v:replace_prices(c,json.loads((ROOT/'data/synthetic/prices.json').read_text(encoding='utf-8'))),kind='prices')
 
 @app.post('/api/cases/{id}/review')
 def review(id:str,change:Change):
@@ -587,7 +751,7 @@ def approval(id:str,change:Change):
     def action(c,v):
         source_guard(c)
         approve(c,v.get('actor',''),materials_snapshot=case_materials(c)['snapshot'])
-    approved=mutate(id,change,action)
+    approved=mutate(id,change,action,kind='approve')
     matrixone.snapshot_approval(approved,change.values.get('actor',''))
     return approved
 
@@ -631,6 +795,10 @@ def export_response(id,result,format,operation):
         headers['Content-Security-Policy']="default-src 'none'; style-src 'unsafe-inline'"
         headers['X-Content-Type-Options']='nosniff'
         return Response(render_quote(result),media_type='text/html',headers=headers)
+    if format=='xlsx':
+        headers['Content-Disposition']=f'attachment; filename="quote-{id}-r{result["revision"]}.xlsx"'
+        headers['X-Content-Type-Options']='nosniff'
+        return Response(render_quote_xlsx(result),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers=headers)
     if format=='csv':
         out=io.StringIO();writer=csv.writer(out)
         writer.writerow(['类型','询价号','件号','数量','单位','件状','币种','单价','总价','交期','价格依据','来源定位','批准人'])
@@ -652,10 +820,20 @@ def quote_preview(id:str,revision:int,format:str='html'):
     except ValueError as e:raise HTTPException(409,str(e))
 
 
+@app.get('/api/cases/{id}/quote-email')
+def quote_email(id:str,revision:int,lang:str='zh'):
+    if lang not in ('zh','en'):raise HTTPException(422,'邮件语言须为 zh 或 en')
+    try:
+        with connection() as c:
+            case=load(c,id);result=checked_export(case,'json',revision,explicit=True)
+        return render_quote_email(result,lang=lang)
+    except ValueError as e:raise HTTPException(409,str(e))
+
+
 @app.post('/api/cases/{id}/exports')
 def formal_export(id:str,change:Change):
     format=change.values.get('format','json')
-    if format not in ('html','csv','json'):raise HTTPException(422,'导出格式须为html/csv/json')
+    if format not in ('csv','html','xlsx','json'):raise HTTPException(422,'导出格式须为html/csv/xlsx/json')
     return audited_export(id,format,change.revision,'explicit_post')
 
 
@@ -664,10 +842,12 @@ def audited_export(id,format,revision,route):
         with connection() as c:
             c.execute('BEGIN IMMEDIATE');case=load(c,id)
             result=checked_export(case,format,revision,explicit=route=='explicit_post')
+            # Render before writing the audit event so a serialization error never leaves a ghost export record.
+            resp=export_response(id,result,format,'formal_export')
             # Audit-only: do not advance the business version or invalidate its own approval.
             event(case,'export',{'revision':case['revision'],'format':format,'route':route});save(c,case)
         matrixone.sync(case,analyze(case))
-        return export_response(id,result,format,'formal_export')
+        return resp
     except ValueError as e:raise HTTPException(409,str(e))
 
 
@@ -709,7 +889,38 @@ class CaseWorkspace:
     def case(self):
         with connection() as c:return load(c,self.id)
     def content(self,case):return case_materials(case)
-    def history(self):return matrixone.report(self.id)
+    def history(self):
+        rep = matrixone.report(self.id)
+        if rep.get('connected'):
+            return rep
+        local = _case_diff_data(self.id)
+        with connection() as c:
+            case = load(c, self.id)
+        events = case.get('events', [])
+        audit = [{'seq': i, 'at': e.get('time', ''), 'action': e.get('action', '')} for i, e in enumerate(events)][-12:][::-1]
+        diff = local['diff']
+        since = None
+        if diff is not None:
+            since = {
+                'from_revision': diff['from_revision'],
+                'to_revision': diff['to_revision'],
+                'from_kind': diff['from_kind'],
+                'from_actor': diff['from_actor'],
+                'from_at': diff['from_at'],
+                'summary': diff['summary'],
+                'changes': diff['rows'],
+            }
+        return {
+            **rep,
+            'source': 'local_sqlite',
+            'snapshots': local['snapshots'],
+            'default_from': local['default_from'],
+            'current_revision': local['current_revision'],
+            'since_last_approval': since,
+            'diff': diff,
+            'audit': audit,
+            'audit_total': len(events),
+        }
     def reference(self, name, args):
         try:store=references.References(ROOT)
         except ValueError:
@@ -767,10 +978,13 @@ class GlobalWorkspace:
         for m in judged:
             key=(m.get('manual') or m.get('decision') or {}).get('category')
             if key:by_category[key]=by_category.get(key,0)+1
+        all_cases=self.case_rows()
+        archived_cases=[c for c in all_cases if c.get('archived')]
+        active_cases=[c for c in all_cases if not c.get('archived')]
         cases=[]
-        for case in self.case_rows():
+        for case in active_cases:
             counts=progress(case)
-            cases.append({'id':case['id'],'title':case['title'],'revision':case['revision'],**counts,'next':agent.next_step(case)})
+            cases.append({'id':case['id'],'title':case['title'],'revision':case['revision'],'archived':False,**counts,'next':agent.next_step(case)})
         todo=[]
         if unrouted:todo.append({'kind':'mail_unrouted','count':len(unrouted),'text':f'{len(unrouted)} 封邮件还没分流'})
         if need_review:todo.append({'kind':'mail_review','count':len(need_review),'text':f'{len(need_review)} 封分流结果需人工确认'})
@@ -783,8 +997,9 @@ class GlobalWorkspace:
         clarifications_open=sum(c['all_open_clarifications'] for c in cases)
         if clarifications_open:todo.append({'kind':'clarify','count':clarifications_open,'text':f'{clarifications_open} 项澄清未解决'})
         return {'today':datetime.now().date().isoformat(),'mails':{'total':len(mails),'routed':len(routed),'unrouted':len(unrouted),
-                'need_review':len(need_review),'by_category':by_category},'cases':cases[:12],'todo':todo,
-                'note':'数字来自当前账号的收件箱与工作单；邮件正文不在这里返回'}
+                'need_review':len(need_review),'by_category':by_category},'cases':cases[:12],
+                'case_total':len(active_cases),'archived_total':len(archived_cases),'todo':todo,
+                'note':'数字来自当前账号的收件箱与活跃工作单（不含已归档）；邮件正文不在这里返回'}
 
     def mails(self,category='',limit='8'):
         try:limit=max(1,min(20,int(limit)))
@@ -801,13 +1016,13 @@ class GlobalWorkspace:
             if len(picked)>=limit:break
         return {'category':category or 'all','mails':picked,'total':len(rows),'note':'只给摘要；正文与改判请到收件箱操作'}
 
-    def reference(self,name,args):
+    def reference(self,name,args,semantic=True):
         store=references.References(ROOT)
         if name=='lookup_stock':return store.stock(str(args.get('part','')),str(args.get('condition','')),str(args.get('unit','')),str(args.get('quantity','')))
         if name=='historical_quotes':return store.history(str(args.get('part','')),str(args.get('condition','')),str(args.get('unit','')),str(args.get('currency','')),str(args.get('quantity','')))
         if name=='find_alternatives':return store.alternatives(str(args.get('part','')))
         kind='stock' if name=='search_parts' else 'rule'
-        return store.search(kind,str(args.get('query','')),rerank=os.getenv('RFQ_REFERENCE_RERANK')=='1')
+        return store.search(kind,str(args.get('query','')),semantic=semantic,rerank=os.getenv('RFQ_REFERENCE_RERANK')=='1')
 
     def case(self):raise ValueError('当前对话不在某张工作单里')
     def content(self,case):raise ValueError('当前对话不在某张工作单里')
@@ -877,8 +1092,8 @@ def home_turns():
     owner=VISITOR.get()
     with connection() as c:
         c.execute('CREATE TABLE IF NOT EXISTS agent_home_turns (owner TEXT,seq INTEGER PRIMARY KEY AUTOINCREMENT,body TEXT)')
-        rows=c.execute('SELECT body FROM agent_home_turns WHERE owner=? ORDER BY seq',(owner,)).fetchall()
-    return [json.loads(b) for (b,) in rows]
+        rows=c.execute('SELECT body FROM agent_home_turns WHERE owner=? ORDER BY seq DESC LIMIT 100',(owner,)).fetchall()
+    return [json.loads(b) for (b,) in reversed(rows)]
 
 
 @app.get('/api/agent/overview')
@@ -891,20 +1106,181 @@ def agent_home_turns():
     return {'turns':home_turns()}
 
 
+_PART_CODE_RE = re.compile(r'(?<![A-Za-z0-9])(?:SYN-\d+|EVT-\d+|[A-Z]{2,6}-\d{2,}[A-Z0-9-]*)(?![A-Za-z0-9])', re.I)
+_TODO_QUERY_RE = re.compile(r'待办|要审|要办|审什么|处理什么|总览|汇总|收件箱|邮件|工作单|进度|状态|待批|待核价|未分流')
+_RULE_QUERY_RE = re.compile(r'规则|冲突|合并|有效期|批准|澄清|缩写|重复|改价|核价原则|为什么不能')
+_STOCK_INTENT_RE = re.compile(r'库存|多少|现货|有货|库位|缺口|剩余|数量')
+
+
+def _extract_part_code(message):
+    for m in _PART_CODE_RE.finditer(message):
+        code = m.group(0).upper()
+        if code.startswith('RFQ-'):
+            continue
+        return code
+    return None
+
+
+def _offline_home_turn(ws, message):
+    began = time.monotonic()
+    msg = message.strip()
+    tools = []
+    steps = []
+    refs = []
+    mails_out = []
+
+    def record(name, args, fn):
+        t0 = time.monotonic()
+        res = fn()
+        ms = round((time.monotonic() - t0) * 1000)
+        if name not in tools:
+            tools.append(name)
+        steps.append({'tool': name, 'ms': ms, 'summary': agent.step_summary(name, args, res)})
+        return res
+
+    def run_ref(name, args, semantic=False):
+        try:
+            res = record(name, args, lambda: ws.reference(name, args, semantic=semantic))
+        except ValueError as e:
+            if name == 'search_rules':
+                rules = agent.search_rules(args.get('query', ''))['rules']
+                res = {
+                    'method': '内置规则 / 合成检索索引未安装',
+                    'records': [{'id': f'RULE-{i+1}', 'kind': 'rule', 'description': r['title'], 'text': r['text'], 'source': r['source']} for i, r in enumerate(rules)],
+                    'warnings': [str(e)],
+                }
+                if name not in tools:
+                    tools.append(name)
+                steps.append({'tool': name, 'ms': 0, 'summary': agent.step_summary(name, args, res)})
+            else:
+                res = {'method': '本地副本不可用', 'records': [], 'warnings': [str(e)]}
+                if name not in tools:
+                    tools.append(name)
+                steps.append({'tool': name, 'ms': 0, 'summary': '未完成：' + str(e)[:60]})
+        refs.append({'tool': name, 'query': args, 'result': res})
+        return res
+
+    part = _extract_part_code(msg)
+    is_todo = bool(_TODO_QUERY_RE.search(msg)) and not ('规则' in msg and not re.search(r'待办|收件箱|邮件|要审|要办|总览|汇总', msg))
+    is_rule = bool(_RULE_QUERY_RE.search(msg))
+
+    lines = ['【本地确定性查询 · 未调用模型】']
+
+    if part:
+        stock_res = run_ref('lookup_stock', {'part': part})
+        quote_res = run_ref('historical_quotes', {'part': part})
+        alt_res = run_ref('find_alternatives', {'part': part})
+
+        stock_recs = stock_res.get('records') or []
+        if stock_recs:
+            groups = stock_res.get('eligible_groups') or []
+            group_txt = '、'.join(f"{g['condition']} {g['available']} {g['unit']}" for g in groups)
+            warehouses = '、'.join(sorted({r.get('warehouse', '') for r in stock_recs if r.get('warehouse')}))
+            lines.append(f"件号 {part} 合成库存：{group_txt}（库位：{warehouses or '见详情'}）。库存不构成有效价格依据，证书与交期须核实。")
+        else:
+            lines.append(f"件号 {part} 当前未查到合成库存记录。")
+
+        quote_recs = quote_res.get('records') or []
+        if quote_recs:
+            latest = quote_recs[0]
+            lines.append(f"历史报价共 {len(quote_recs)} 条，最近一条：{latest.get('date', '')} {latest.get('currency', '')} {latest.get('amount', '')}（件状 {latest.get('condition', '')}，仅供参考，不可作为当前有效价）。")
+        else:
+            lines.append(f"件号 {part} 暂无历史报价记录。")
+
+        alt_recs = alt_res.get('records') or []
+        if alt_recs:
+            alt_txt = '、'.join(f"{r.get('alternative', '')}（{r.get('conditions', '须人工确认')}）" for r in alt_recs[:3])
+            lines.append(f"已记录的合成替代件：{alt_txt}。")
+        else:
+            lines.append(f"件号 {part} 未查到已登记的替代件关系。")
+    elif is_todo:
+        ov = record('pending_overview', {}, ws.overview)
+        ml = record('list_mails', {'limit': '8'}, lambda: ws.mails(limit='8'))
+        mails_out = (ml.get('mails') or [])[:20]
+        m = ov.get('mails') or {}
+        todo = ov.get('todo') or []
+        case_total = ov.get('case_total', len(ov.get('cases') or []))
+        archived_total = ov.get('archived_total', 0)
+        arch_note = f"（另有 {archived_total} 张已归档）" if archived_total else ''
+        lines.append(f"当前共有 {case_total} 张活跃工作单{arch_note}，收件箱 {m.get('total', 0)} 封邮件（未分流 {m.get('unrouted', 0)}，待确认 {m.get('need_review', 0)}）。")
+        if todo:
+            lines.append('待处理事项：' + '；'.join(item['text'] for item in todo) + '。')
+            lines.append('请前往「收件箱」或对应工作单处理后人工核对、批准。')
+        else:
+            lines.append('当前暂无待办事项，可直接导入新询价或打开已有工作单。')
+    elif is_rule:
+        q_short = msg[:300]
+        rule_res = run_ref('search_rules', {'query': q_short}, semantic=False)
+        recs = rule_res.get('records') or []
+        if not recs:
+            fallback_rules = agent.search_rules(q_short)['rules']
+            recs = [{'id': f'RULE-{i+1}', 'kind': 'rule', 'description': r['title'], 'text': r['text'], 'source': r['source']} for i, r in enumerate(fallback_rules)]
+            rule_res['records'] = recs
+        if recs:
+            summary_items = [f"「{r.get('description', r.get('title', ''))}」：{r.get('text', '')}" for r in recs[:3]]
+            lines.append(f"命中 {len(recs)} 条业务规则：")
+            lines.extend(summary_items)
+        else:
+            lines.append('未匹配到相关业务规则条目。')
+    else:
+        part_res = run_ref('search_parts', {'query': msg[:300]}, semantic=False)
+        hits = part_res.get('records') or []
+        if hits:
+            cand_text = '；'.join(
+                f"{r.get('part', '')}（{r.get('description', '')}，{r.get('condition', '')}，数量 {r.get('quantity', '')} {r.get('unit', '')}，{r.get('warehouse', '')}）"
+                for r in hits[:3]
+            )
+            lines.append(f"按关键词匹配到 {len(hits)} 条合成候选件（须人工确认，不可擅自换件）：{cand_text}。")
+            top_part = hits[0].get('part', '')
+            if top_part and _STOCK_INTENT_RE.search(msg):
+                stock_res = run_ref('lookup_stock', {'part': top_part})
+                groups = stock_res.get('eligible_groups') or []
+                if groups:
+                    gtxt = '、'.join(f"{g['condition']} {g['available']} {g['unit']}" for g in groups)
+                    wh = '、'.join(sorted({r.get('warehouse', '') for r in (stock_res.get('records') or []) if r.get('warehouse')}))
+                    lines.append(f"首条高分候选 {top_part} 当前合成库存：{gtxt}（库位：{wh or '见详情'}）。库存不构成有效价格依据。")
+        else:
+            lines.append('未在本地合成参考库中检索到匹配件号；可提供明确件号（如 SYN-001）查询库存与历史报价，或询问当前待办与业务规则。')
+
+    return {
+        'reply': '\n'.join(lines),
+        'draft': None,
+        'tools': tools,
+        'steps': steps,
+        'references': refs[:12],
+        'mails': mails_out,
+        'seconds': round(time.monotonic() - began, 2),
+        'degraded': False,
+        'next_step': '',
+        'tokens': 0,
+        'requests': 0,
+        'models': [],
+        'switches': 0,
+        'local': True,
+        'mode': 'offline-local',
+    }
+
+
 @app.post('/api/agent/home')
 async def agent_home_turn(body:HomeMessage,session=Depends(get_agent_session)):
-    if session is None:raise HTTPException(409,'模型未启用，可以先看收件箱与工作单列表')
     if not body.message.strip():raise HTTPException(422,'请输入内容')
     if len(body.message)>600:raise HTTPException(422,'首页提问限600字')
-    if not body.consent and len(body.message)>AGENT_SHORT_QUESTION:raise HTTPException(422,'请先同意把问题发送给模型服务')
-    ACCOUNTS.check_demo_call()
-    try:result=await agent.run_turn(GlobalWorkspace(VISITOR.get()),body.message,home_turns(),session,can_add_mail=False)
-    except ValueError as e:raise HTTPException(422,str(e))
-    except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试')
+    if session is None:
+        result = await asyncio.to_thread(_offline_home_turn, GlobalWorkspace(VISITOR.get()), body.message)
+    else:
+        if not body.consent and len(body.message)>AGENT_SHORT_QUESTION:raise HTTPException(422,'请先同意把问题发送给模型服务')
+        ACCOUNTS.check_demo_call()
+        try:result=await agent.run_turn(GlobalWorkspace(VISITOR.get()),body.message,home_turns(),session,can_add_mail=False)
+        except ValueError as e:raise HTTPException(422,str(e))
+        except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试')
     turn={'message':body.message,'at':datetime.now().isoformat(timespec='seconds'),**result}
     with connection() as c:
         c.execute('CREATE TABLE IF NOT EXISTS agent_home_turns (owner TEXT,seq INTEGER PRIMARY KEY AUTOINCREMENT,body TEXT)')
         c.execute('INSERT INTO agent_home_turns (owner,body) VALUES (?,?)',(VISITOR.get(),json.dumps(turn,ensure_ascii=False)))
+        c.execute(
+            'DELETE FROM agent_home_turns WHERE owner=? AND seq NOT IN (SELECT seq FROM agent_home_turns WHERE owner=? ORDER BY seq DESC LIMIT ?)',
+            (VISITOR.get(), VISITOR.get(), MAX_HOME_TURNS),
+        )
     return {'turn':turn}
 
 

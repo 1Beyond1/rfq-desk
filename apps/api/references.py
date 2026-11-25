@@ -119,8 +119,12 @@ class References:
 
     def stock(self, part, condition='', unit='', quantity=''):
         if not str(part).strip():raise ValueError('精确库存查询需要明确件号；只有描述时请使用语义找件')
+        part = str(part).strip().upper()
+        condition = str(condition or '').strip().upper()
+        unit = str(unit or '').strip().upper()
+        quantity = str(quantity or '').strip()
         rows,method,warnings = self.select('stock',part)
-        qualified = [r for r in rows if (not condition or r['condition']==condition) and (not unit or r['unit']==unit)]
+        qualified = [r for r in rows if (not condition or str(r['condition']).strip().upper()==condition) and (not unit or str(r['unit']).strip().upper()==unit)]
         keep = {id(r) for r in qualified}
         unmatched = [r for r in rows if id(r) not in keep]
         if not qualified:
@@ -142,9 +146,20 @@ class References:
 
     def history(self, part, condition='', unit='', currency='', quantity=''):
         if not str(part).strip():raise ValueError('历史报价查询需要明确件号')
+        part = str(part).strip().upper()
+        condition = str(condition or '').strip().upper()
+        unit = str(unit or '').strip().upper()
+        currency = str(currency or '').strip().upper()
+        quantity = str(quantity or '').strip()
         rows,method,warnings = self.select('quote',part)
         for row in rows:
-            row['differences'] = [f'{label}不同：历史{row[k]}，本次{value}' for k,label,value in [('condition','件状',condition),('unit','单位',unit),('currency','币种',currency),('quantity','数量',quantity)] if value and str(row[k])!=str(value)]
+            diffs = []
+            for k,label,value in [('condition','件状',condition),('unit','单位',unit),('currency','币种',currency)]:
+                if value and str(row[k]).strip().upper()!=value:
+                    diffs.append(f'{label}不同：历史{row[k]}，本次{value}')
+            if quantity and str(row['quantity']).strip()!=quantity:
+                diffs.append(f'数量不同：历史{row["quantity"]}，本次{quantity}')
+            row['differences'] = diffs
             row['usable_as_current_price'] = False
             row['expired'] = row['valid_until']<date.today().isoformat()
             if row['expired']:row['differences'].append('历史报价有效期已过，不能作为当前价格')
@@ -152,8 +167,29 @@ class References:
 
     def alternatives(self, part):
         if not str(part).strip():raise ValueError('替代关系查询需要明确主件号')
+        part = str(part).strip().upper()
         rows,method,warnings = self.select('alternative',part)
         return self.result(rows,method,warnings,note='仅列出有明确记录的替代关系；互换适用性须人工确认')
+
+    @staticmethod
+    def _tokenize(query):
+        tokens = []
+        seen = set()
+        def add(tok):
+            if tok and tok not in seen:
+                seen.add(tok)
+                tokens.append(tok)
+        for m in re.finditer(r'[a-z0-9][a-z0-9-]*|[\u4e00-\u9fff]+', str(query).lower()):
+            seg = m.group(0)
+            if '\u4e00' <= seg[0] <= '\u9fff':
+                if len(seg) == 1:
+                    add(seg)
+                else:
+                    for i in range(len(seg) - 1):
+                        add(seg[i:i + 2])
+            else:
+                add(seg)
+        return tokens
 
     def search(self, kind, query, semantic=True, rerank=False):
         if kind not in ('stock','rule') or not isinstance(query,str) or not 1<=len(query.strip())<=300:
@@ -191,7 +227,7 @@ class References:
                 warnings.append('向量模型本次不可用，退回关键词检索')
         elif semantic:
             warnings.append('尚无匹配版本的向量索引，使用关键词检索')
-        words = re.findall(r'[a-zA-Z0-9-]+|[\u4e00-\u9fff]{2}',query.lower())
+        words = self._tokenize(query)
         scored = [{**r,'score':sum(w in self.content(r).lower() for w in words)} for r in rows]
         hits = sorted([r for r in scored if r['score']>0],key=lambda r:r['score'],reverse=True)[:5]
         return self.result(hits,method+' / 关键词',warnings,score_type='关键词命中数',requires_human_confirmation=True)

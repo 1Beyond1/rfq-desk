@@ -186,3 +186,104 @@ def export_data(case,today=None,materials_snapshot=None):
     if not isinstance(ca,dict) or ca.get('date')!=today or ca.get('token')!=expected_token:
         raise ValueError('当前版本未全部批准，禁止正式导出')
     return {'case_id':case['id'],'revision':case['revision'],'price_version':case['price_version'],'label':'合成演示报价' if any(r['price']['kind']=='synthetic' for r in rows) else '报价响应', 'rows':rows}
+
+
+DIFF_FIELDS = (*FIELDS, 'excluded', 'price_amount', 'price_currency', 'price_source', 'approved')
+_PRICE_DIFF_FIELDS = {'price_amount', 'price_currency', 'price_source'}
+
+
+def _row_diff_view(row):
+    price = row.get('price') or {}
+    return {
+        **{k: row.get(k, '') for k in FIELDS},
+        'excluded': bool(row.get('excluded', False)),
+        'price_amount': price.get('amount') or '',
+        'price_currency': price.get('currency') or '',
+        'price_source': price.get('source') or '',
+        'approved': bool(row.get('approved', False)),
+    }
+
+
+def _snapshot_date(case, meta=None):
+    ca = case.get('case_approval')
+    if isinstance(ca, dict) and isinstance(ca.get('date'), str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', ca['date']):
+        return ca['date']
+    created = (meta or {}).get('created_at', '')
+    if isinstance(created, str) and len(created) >= 10 and re.fullmatch(r'\d{4}-\d{2}-\d{2}', created[:10]):
+        return created[:10]
+    return None
+
+
+def diff_snapshots(before_case, after_case, from_meta=None, to_meta=None):
+    before_today = _snapshot_date(before_case, from_meta)
+    after_today = None if (to_meta or {}).get('kind', 'current') == 'current' else _snapshot_date(after_case, to_meta)
+    before_analyzed = analyze(before_case, today=before_today)
+    after_analyzed = analyze(after_case, today=after_today)
+    before_map = {r['id']: r for r in before_analyzed}
+    after_map = {r['id']: r for r in after_analyzed}
+    ordered_ids = list(before_map.keys()) + [rid for rid in after_map.keys() if rid not in before_map]
+
+    summary = {
+        'added': 0,
+        'removed': 0,
+        'excluded': 0,
+        'restored': 0,
+        'changed': 0,
+        'price_changed': 0,
+        'unchanged': 0,
+    }
+    diff_rows = []
+
+    for row_id in ordered_ids:
+        b = before_map.get(row_id)
+        a = after_map.get(row_id)
+        if b is None:
+            av = _row_diff_view(a)
+            changes = [{'field': k, 'before': '', 'after': av[k]} for k in DIFF_FIELDS if av[k] not in ('', False, None)]
+            summary['added'] += 1
+            diff_rows.append({'row_id': row_id, 'rfq': a.get('rfq', ''), 'part': a.get('part', ''), 'status': 'added', 'changes': changes})
+            continue
+        if a is None:
+            bv = _row_diff_view(b)
+            changes = [{'field': k, 'before': bv[k], 'after': ''} for k in DIFF_FIELDS if bv[k] not in ('', False, None)]
+            summary['removed'] += 1
+            diff_rows.append({'row_id': row_id, 'rfq': b.get('rfq', ''), 'part': b.get('part', ''), 'status': 'removed', 'changes': changes})
+            continue
+        bv = _row_diff_view(b)
+        av = _row_diff_view(a)
+        changes = [{'field': k, 'before': bv[k], 'after': av[k]} for k in DIFF_FIELDS if bv[k] != av[k]]
+        if not changes:
+            summary['unchanged'] += 1
+            continue
+        if not bv['excluded'] and av['excluded']:
+            status = 'excluded'
+            summary['excluded'] += 1
+        elif bv['excluded'] and not av['excluded']:
+            status = 'restored'
+            summary['restored'] += 1
+        else:
+            status = 'changed'
+            summary['changed'] += 1
+        if any(c['field'] in _PRICE_DIFF_FIELDS for c in changes):
+            summary['price_changed'] += 1
+        diff_rows.append({
+            'row_id': row_id,
+            'rfq': a.get('rfq', '') or b.get('rfq', ''),
+            'part': a.get('part', '') or b.get('part', ''),
+            'status': status,
+            'changes': changes,
+        })
+
+    return {
+        'from_revision': before_case['revision'],
+        'to_revision': after_case['revision'],
+        'from_kind': (from_meta or {}).get('kind', ''),
+        'to_kind': (to_meta or {}).get('kind', 'current'),
+        'from_actor': (from_meta or {}).get('actor', ''),
+        'from_at': (from_meta or {}).get('created_at', ''),
+        'price_version_before': before_case.get('price_version', 0),
+        'price_version_after': after_case.get('price_version', 0),
+        'materials_changed': before_case.get('materials_snapshot', '') != after_case.get('materials_snapshot', ''),
+        'summary': summary,
+        'rows': diff_rows,
+    }

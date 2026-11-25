@@ -299,7 +299,8 @@ def step_summary(name,args,result):
     if name=='version_history':return '已读取版本与审计记录'
     if name=='pending_overview':
         todo=result.get('todo') or []
-        return f"{len(todo)} 项待办 · {len(result.get('cases') or [])} 张工作单" if todo else '暂时没有待办'
+        total=result.get('case_total',len(result.get('cases') or []))
+        return f"{len(todo)} 项待办 · {total} 张工作单" if todo else '暂时没有待办'
     if name=='list_mails':
         mails=result.get('mails') or []
         return f"{len(mails)} 封邮件摘要"+('（'+str(result.get('category'))+'）' if result.get('category') else '')

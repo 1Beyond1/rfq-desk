@@ -199,6 +199,7 @@ class Accounts:
                     if 'cases' in tables: c.execute('DELETE FROM cases WHERE id=?', (cid,))
                     if 'case_owners' in tables: c.execute('DELETE FROM case_owners WHERE case_id=?', (cid,))
                     if 'agent_turns' in tables: c.execute('DELETE FROM agent_turns WHERE case_id=?', (cid,))
+                    if 'case_snapshots' in tables: c.execute('DELETE FROM case_snapshots WHERE case_id=?', (cid,))
                     removed_cases.append(cid)
                 if 'inbox_messages' in tables: c.execute('DELETE FROM inbox_messages WHERE owner=?', (visitor,))
                 if 'agent_home_turns' in tables: c.execute('DELETE FROM agent_home_turns WHERE owner=?', (visitor,))
@@ -210,7 +211,10 @@ class Accounts:
             upload_base = Path(root).resolve()
             for cid in removed_cases:
                 if isinstance(cid, str) and cid and Path(cid).name == cid and cid not in ('.', '..'):
-                    target = (upload_base / cid).resolve()
+                    raw_target = upload_base / cid
+                    if raw_target.is_symlink():
+                        continue
+                    target = raw_target.resolve()
                     if target.parent == upload_base and target.exists():
                         shutil.rmtree(target, ignore_errors=True)
         return len(expired)
