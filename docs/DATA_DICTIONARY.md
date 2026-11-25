@@ -1,6 +1,6 @@
 # 数据字典与格式边界
 
-2026-10-22。官方素材来源与 SHA-256 见 SOURCE_MANIFEST.json，原始字节只读，本地解析报告在 var/official-inspection.json，不提交原文或提取结果。
+本地研究原件仅做只读解析验证，不纳入开源仓库，不提交原文或提取结果；公开演示全部使用 `data/synthetic/` 合成数据。
 
 询价行：rfq 询价号、part 件号、description 描述、quantity 数量、unit 单位、condition 件状、due 截止日期、requirements 特殊要求、priority 原始优先级。标识用字符串；raw_fields 保留提取时原值；sources 保存文件名、SHA-256、HTML 表序/工作表/页/行及完整原始行。手工更正写入事件中的 before/after 和理由，原始行不覆盖。每个字段的出处为对应原始行及标题映射；尚无字符级坐标高亮。
 

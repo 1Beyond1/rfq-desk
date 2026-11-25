@@ -1,61 +1,154 @@
 # 航材询报价工作台 · RFQ Desk
 
-把一封航材询价邮件（正文、表格、PDF）处理成可以放行的报价单。每个询价字段都绑定原文出处；重复、冲突、缺价、过期这些问题会挡住批准，不会被悄悄合并或补全。
+[English](README.en.md)
 
-参赛：MatrixNEXT 2026，赛题“RFQ 询价分析与报价智能体”。
+面向航空器材询报价场景的 **Agent 辅助工作台**。将客户的询价邮件（正文、表格、PDF 附件）转化为可追溯、可审核、可放行的正式报价单：Agent 负责读原文、提取带行级出处的候选、查库存与历史报价、匹配有效价表并起草澄清邮件；**接纳候选、核价、批准和导出始终由人工在工作台内确认**，任何改动都会自动令旧批准失效。
 
-## 能做什么
+---
 
-- **导入原件**：EML、CSV、XLSX、文本型 PDF、TXT。表格按表头识别询价号、件号、数量、单位、件状等列（中英文表头均可）。
-- **工作区首页与收件箱**：当前账号待办汇总；12封合成邮件带此前真实Jev判定（明确标注“样本预置”），可重新判断或人工改判。开场简报按系统计数汇总，不调用模型。
-- **有据查询**：15种Agent工具，含工作区待办与邮件摘要。明确件号查库存、历史与替代关系；描述查询经bge-m3与MatrixOne向量检索，展示候选分数与来源。55条库存、30条历史报价、5条替代关系和8条规则均为合成参考；库存与历史价不能代替当前有效价。
-- **询价 Agent**：贴一封邮件或在工作单里提问，它会提取询价行、查价、解释为什么还不能批准，有缺口时起草发给对方的澄清邮件。它的工具只能读取、提议和起草；接纳候选、改字段、录价、批准、导出、发送都由人在页面上完成。
-- **模型提取候选**：自由文本邮件由模型提出候选行，每个值都必须是原文里逐字出现的片段，人工核对后才进入正式询价行。
-- **核对与澄清**：同件号不同询价号不合并；同一询价里的重复、修订、数量冲突分别处理；不认识的缩写不解释，标出来等人确认。
-- **核价**：按件号、单位、件状和有效期匹配价表；没有唯一有效价格时保持待报价。
-- **批准与输出**：批准绑定当时的询价行、价格和澄清状态，之后任一项变化，旧批准自动失效。输出 HTML / CSV 报价响应。
+## 界面预览
 
-## 运行
+| 询价 Agent 工作台（工具调用时间线 + 原文对照） | 候选审阅（逐字段绑定原文出处） |
+|---|---|
+| ![询价 Agent 工作台](docs/assets/agent.jpg) | ![候选审阅](docs/assets/review.jpg) |
 
-需要 Python 3.12，依赖在本目录的 `.venv`。
+<details>
+<summary>查看更多截图：四项检查通过与版本批准</summary>
 
-```powershell
-./.venv/Scripts/python.exe -m pip install -r requirements.txt
-./.venv/Scripts/python.exe distribution/serve.py
+![批准当前版本](docs/assets/approve.jpg)
+
+</details>
+
+---
+
+## 核心特性
+
+- **多格式原件解析与出处绑定**：支持导入 `EML`、`CSV`、`XLSX`、文本型 `PDF` 与 `TXT`，自动识别中英文表头；每个提取出的字段（询价号、件号、数量、单位、件状、交期等）均绑定到原件文件的具体位置，点击即可在右侧原文高亮核对。
+- **权限清晰的询价 Agent（Human-in-the-Loop）**：
+  - 区分工作区首页工具与工单内工具，支持读取原件、提取结构化候选、查库存/历史报价/替代件、检索业务规则、比对版本历史与起草澄清邮件；
+  - Agent 不持有任何修改正式数据、录入价格、批准或发送邮件的写工具，从机制上阻断提示词注入导致的越权操作。
+- **严格业务规则与版本防漂移**：
+  - 同件号不同询价号绝不误合并；重复行、修订冲突、未知缩写、缺价、过期价格均显式拦截；
+  - 金额计算全程采用 `Decimal`（后端）与 `BigInt` 定点运算（前端），按币种分列合计，不擅自折汇；
+  - 批准锁定整单有效行集合、原件快照、核查结论与待审状态；后续删行、改数、追加修订原件或更新价表均会自动失效旧批准并拦截旧版本导出（`409`）。
+- **收件箱分流与参考知识库**：内置合成收件箱分流流程，支持按明确件号执行精确查询，或按自然语言描述结合向量召回匹配候选件号与业务规则。
+- **可选 MatrixOne 扩展**：SQLite 作为本地主记录源保证断网可用；配置 MatrixOne 后可启用 SQL/向量检索、批准整库快照、候选数据分支差异、决策审计与 Agent 记忆同步。
+- **多账号隔离与桌面/移动端引导**：支持普通用户、管理员与免注册隔离体验空间（`scrypt` 密码哈希、SHA-256 落库会话、`HttpOnly`/`SameSite=Strict`、Origin/CSRF 防护），并提供自适应桌面端与 375–390px 手机端的交互式聚光灯引导（Spotlight Tour）。
+
+---
+
+## 处理流程
+
+```mermaid
+flowchart LR
+    A[原始邮件 / 附件<br/>EML · XLSX · PDF · CSV] --> B[询价 Agent<br/>提取候选 · 查价 · 查库存 · 起草澄清]
+    B --> C[人工逐字段核对<br/>绑定原文行级出处]
+    C --> D[正式询价行<br/>冲突/澄清清零 + 有效价表匹配]
+    D --> E[人工批准当前版本<br/>锁定快照与批准人身份]
+    E --> F[服务端二次核验导出<br/>HTML 报价响应 · CSV]
+    D -. 任意修改 / 追加原件 .-> G[旧批准自动失效<br/>导出拦截 409]
 ```
 
-打开 http://127.0.0.1:5311 。以上是离线模式，不调用任何模型：合成演示和人工流程都可用，询价 Agent 和模型提取不可用。
+---
 
-启用模型（OpenAI 兼容接口）：
+## 快速开始
 
-```powershell
-$env:RFQ_MODEL_URL="https://.../v1/chat/completions"
-$env:RFQ_MODEL_KEY="..."
-$env:RFQ_MODEL_NAME="..."
-./.venv/Scripts/python.exe distribution/serve.py --model
-```
+### 环境要求
 
-每日调用次数上限默认 100，可用 `RFQ_MODEL_MAX_CALLS` 调整。它只限制次数，不限制金额。数据库和上传文件在 `var/`，不进 Git。
+- Python **3.12+**
+- Node.js **20+**（仅用于运行前端单元测试）
 
-## 测试
+### 1. 安装依赖
+
+**Windows (PowerShell)**
 
 ```powershell
-./.venv/Scripts/python.exe -m pytest tests -q
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## 数据
+**macOS / Linux**
 
-- `data/synthetic/`：人工编写的合成邮件、表格和演示价表，可以公开演示，也可以发给模型。
-- `data/raw/`：本机官方素材，不进 Git，不发给任何模型，仅用于本地解析研究。
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+```
 
-## 现状与局限
+### 2. 启动本地离线模式（零外部依赖，开箱可试）
 
-最新进展见 [docs/STATUS.md](docs/STATUS.md)。线上采用账号隔离，评委可免注册创建独立合成体验空间；普通用户与管理员使用各自账号。
+离线模式下全部合成示例、收件箱、人工核对、价表录入、批准、预览与导出均可完整运行（不向外发送任何模型请求）：
 
-MatrixOne已接入SQL、向量检索、批准快照、数据分支差异、决策审计和Agent记忆。SQLite仍是业务记录源，远端不可用时会显示实际回退状态。本作品自建部署，未托管在MOI平台。
+**Windows (PowerShell)**
 
-主要局限：
+```powershell
+.\.venv\Scripts\python.exe distribution/serve.py
+```
 
-- 模型和 Agent 的成绩都来自合成邮件，没有真人试用。
-- 模型响应时间随工具与服务情况变化；页面显示真实工具步骤，模型失败时可重试，已有原件和人工工作保留。
-- XLSX、PDF 询价附件的完整上传体验尚未在浏览器里走查。
+**macOS / Linux**
+
+```bash
+./.venv/bin/python distribution/serve.py
+```
+
+启动后访问 [http://127.0.0.1:5311/](http://127.0.0.1:5311/)（后端 API 监听 `http://127.0.0.1:8311`）。
+
+### 3. 启用账号登录与 AI 模型（可选）
+
+启用 OpenAI 兼容接口运行询价 Agent 与候选提取：
+
+```bash
+export RFQ_AUTH_REQUIRED=1
+export RFQ_COOKIE_SECURE=0           # 本地 HTTP 调试设为 0，生产 HTTPS 保持 1
+export RFQ_MODEL_URL="https://api.example.com/v1/chat/completions"
+export RFQ_MODEL_NAME="your-model-name"
+export RFQ_MODEL_KEY="your-api-key"
+
+./.venv/bin/python distribution/serve.py --model
+```
+
+> 本地账号管理可使用 CLI 工具 `python scripts/accounts.py` 创建管理员与普通用户。完整变量说明见 [`.env.example`](.env.example)。
+
+---
+
+## 运行测试
+
+```bash
+# 后端 Python 测试套件
+python -m pytest tests -q
+
+# 前端 JavaScript 语法检查与 Node 单元测试
+node --test tests/*.test.cjs
+```
+
+---
+
+## 目录结构
+
+```text
+rfq-desk/
+├── apps/
+│   ├── api/            # FastAPI 后端：解析、业务域规则、Agent、账号、收件箱、MatrixOne 镜像
+│   └── web/            # 原生 HTML/CSS/JS 三栏工作台、响应式移动端适配与 Spotlight 引导
+├── data/
+│   └── synthetic/      # 100% 合成的演示邮件、表格、价表、收件箱与参考库数据
+├── distribution/       # 单进程前后端联合启动脚本与容器自检工具
+├── docs/               # 数据字典、澄清闭环、草稿恢复、账号与运行手册及界面截图
+├── evals/              # 原文证据索引（EvidenceIndex）与离线/协议评测集
+├── scripts/            # 本地静态服务（支持 Range 206）、账号 CLI 与合成数据生成脚本
+└── tests/              # Python pytest 与 Node 前端单元测试
+```
+
+---
+
+## 延伸文档
+
+- [账号隔离与体验引导说明](docs/ACCOUNTS_AND_GUIDE.md)
+- [数据字典](docs/DATA_DICTIONARY.md)
+- [澄清闭环规范](docs/CLARIFICATION_LOOP.md)
+- [价表导入规范](docs/PRICE_IMPORT.md)
+- [本地草稿恢复设计](docs/DRAFT_RECOVERY.md)
+- [本地演示与运行手册](docs/DEMO_RUNBOOK.md)
+
+## 许可证
+
+本项目基于 [MIT License](LICENSE) 开源。仓库内所有业务样本数据均为人工构造的合成数据，不代表真实客户或商业报价。

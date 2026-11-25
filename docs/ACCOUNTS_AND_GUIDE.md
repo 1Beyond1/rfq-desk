@@ -24,7 +24,7 @@ $env:RFQ_PUBLIC_ORIGIN='http://127.0.0.1:5311'
 .venv/Scripts/python.exe distribution/serve.py
 ```
 
-公开部署使用母目录专用部署编排配置，本地模板已准备`RFQ_AUTH_REQUIRED=1`、`RFQ_COOKIE_SECURE=1`及正式来源地址。模板没有执行到服务器；仍须按部署运维文档批准上线、备份和切换。不要用旧共享compose重建A。
+公开部署建议通过环境变量配置 `RFQ_AUTH_REQUIRED=1`、`RFQ_COOKIE_SECURE=1` 与正式 `RFQ_PUBLIC_ORIGIN`，并在反向代理后使用 HTTPS 访问。
 
 忘记密码时，由具备主机维护权限的人执行以下命令；会撤销该账号全部会话，下次登录要求更换密码。停用账号不会因重置密码自动启用。
 
@@ -52,6 +52,9 @@ $env:RFQ_PUBLIC_ORIGIN='http://127.0.0.1:5311'
 
 设计依据：[OWASP密码存储建议](https://github.com/OWASP/CheatSheetSeries/blob/master/cheatsheets/Password_Storage_Cheat_Sheet.md)、[会话管理](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet)、[CSRF防护](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)。不是独立安全审计或生产渗透测试。
 
-## 本轮验证
+## 定向验证
 
-证据在`var/accounts-guide-20261109/`：隔离合成账号和库，回环端口8367，模型/MatrixOne均关闭。生产库和原4张线上工作单未访问、未迁移。后端233通过/1真实集成跳过，前端28通过；另对Unicode密码和CSRF修改做受影响回归。截图、下载CSV与详细范围见该目录`SUMMARY.json`。本次没有模型请求、SSH、公开部署、Git提交推送、材料制作或正式参赛提交。
+```bash
+python -m pytest tests/test_accounts.py tests/test_judge_demo.py -q
+node --test tests/account-storage.test.cjs tests/spotlight.test.cjs
+```

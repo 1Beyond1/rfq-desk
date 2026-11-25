@@ -19,12 +19,6 @@
 
 定向检查：
 
-```powershell
-./.venv/Scripts/python.exe -m pytest tests/test_clarifications.py -q
-node --check apps/web/clarifications.js
-# 浏览器CLI已安装并打开后；每次创建新合成案和独立replay输出目录
-./scripts/browser.ps1 run-code --filename scripts/browser-check-clarifications.js
-./scripts/browser.ps1 run-code --filename scripts/browser-check-clarification-review.js
+```bash
+python -m pytest tests/test_clarifications.py -q
 ```
-
-本轮已执行证据在 `var/clarification-20261024/`，不覆盖旧案/输出。完整案75b36f5536f9当前revision19、两项已解决、USD65.00且已批准；复核案ecb3f54b26b4故意留新目标问题及另一RFQ待答复。真实模型、调优/冻结/留出、专业试用和平台接入仍未运行。
