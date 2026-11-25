@@ -458,9 +458,9 @@ def materials(id:str):
 
 @app.post('/api/semantic-demo/{name}')
 def semantic_demo(name:str):
-    choices={'prose':'prose-cn.eml','revision':'forward-revision.eml','mail-en':'../realistic-mail/en-prose.eml','mail-revision':'../realistic-mail/zh-forward-revision.eml','mail-mixed':'../realistic-mail/zh-mixed-line.eml'}
+    choices={'prose':'semantic/prose-cn.eml','revision':'semantic/forward-revision.eml','mail-en':'realistic-mail/en-prose.eml','mail-revision':'realistic-mail/zh-forward-revision.eml','mail-mixed':'realistic-mail/zh-mixed-line.eml'}
     if name not in choices:raise HTTPException(404)
-    p=ROOT/'data/synthetic/semantic'/choices[name]
+    p=ROOT/'data/synthetic'/choices[name]
     return import_bytes(p.name,p.read_bytes())
 
 def store_batch(id,change,content,result,consent):
