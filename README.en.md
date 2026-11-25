@@ -27,13 +27,16 @@ An **agent-assisted quoting workbench** for aviation spare parts Requests for Qu
 - **Least-Privilege Inquiry Agent (Human-in-the-Loop)**:
   - Separates workspace home tools from per-case tools for reading originals, proposing candidates, checking inventory/historical quotes/alternates, searching rules, inspecting revision diffs, and drafting clarification emails.
   - Exposes zero write tools for accepting formal rows, altering prices, approving quotes, or sending emails — preventing prompt-injection privilege escalation by construction.
-- **Deterministic Business Rules & Snapshot Integrity**:
+- **Deterministic Business Rules, Local Snapshots & Visual Diff**:
   - Never merges distinct RFQs sharing the same part number; blocks duplicates, unresolved conflicts, unknown abbreviations, missing prices, and expired validity dates.
   - Uses exact `Decimal` arithmetic on the backend and `BigInt` fixed-point aggregation on the frontend, grouped per currency without implicit FX conversion.
-  - Approval locks the active row set, original material snapshot, review note, and zero-pending-candidate state; excluding rows, editing quantities, appending revisions, or changing price catalogs automatically invalidates prior approvals and rejects stale exports (`409`).
-- **Inbox Triage & Reference Search**: Includes a synthetic inbox triage workflow alongside exact SQL part lookups and vector-assisted description/rule retrieval.
+  - Approval locks the active row set, original material snapshot, review note, and zero-pending-candidate state; built-in SQLite **version snapshots & field-level Diff** compare the last approval against any revision even without MatrixOne, while edits/exclusions/revisions automatically invalidate prior approvals (`409`).
+- **Multi-Format Server-Verified Exports**: Exports audited HTML quotes, CSV, formatted two-sheet **Excel (`.xlsx`)** workbooks (with `@` text locking to preserve leading zeros + provenance sheet + formula-injection neutralization), and deterministic **ZH/EN quote reply email drafts** ready to copy.
+- **Full Offline Loop & Productivity Tools**:
+  - Without an external LLM key, the workspace home assistant falls back honestly to local deterministic queries (todos, inbox summaries, part/description stock, historical quotes, alternates, and rules);
+  - Includes status-filtered work-order lists, archive & safe delete, inbox category/keyword search, an inline 3-tab pricing reference panel (stock shortage / historical quotes / alternates), and keyboard shortcuts (`[` `]` / `Alt+S` / `/` / `?`).
 - **Optional MatrixOne Integration**: SQLite serves as the resilient primary store; connecting MatrixOne adds SQL/vector retrieval, whole-database approval snapshots, candidate data branch diffs, decision auditing, and versioned agent memory.
-- **Account Isolation & Responsive Guided Tour**: Built-in user/admin/guest-demo isolation (`scrypt` password hashing, SHA-256 session tokens, `HttpOnly`/`SameSite=Strict`, Origin/CSRF checks) plus an interactive Spotlight Tour tuned for both desktop and mobile (375–390px) viewports.
+- **Account Isolation & Responsive Guided Tour**: Built-in user/admin/guest-demo isolation (`scrypt` password hashing, SHA-256 session tokens, `HttpOnly`/`SameSite=Strict`, Origin/CSRF checks) plus a dynamic-step interactive Spotlight Tour tuned for desktop and mobile (375–390px) viewports.
 
 ---
 
@@ -45,7 +48,7 @@ flowchart LR
     B --> C[Human Evidence Review<br/>Field-to-Line Verification]
     C --> D[Formal RFQ Rows<br/>Zero Conflicts + Valid Price Match]
     D --> E[Human Approval<br/>Snapshot & Identity Lock]
-    E --> F[Server-Verified Export<br/>HTML Quote · CSV]
+    E --> F[Server-Verified Export<br/>HTML · CSV · XLSX · Reply Email]
     D -. Any Edit / Appended Revision .-> G[Approval Invalidated<br/>Export Blocked 409]
 ```
 
