@@ -1,16 +1,16 @@
-# RFQ Desk — Aviation Spare Parts RFQ & Quoting Workbench
+# RFQ Desk — Agent-Assisted RFQ & Quoting Workbench
 
 [简体中文](README.md)
 
-An **agent-assisted quoting workbench** for aviation spare parts Requests for Quotation (RFQs). It transforms incoming inquiry emails (body text, spreadsheets, and text PDFs) into auditable, traceable quotes. The AI agent reads originals, extracts line-level evidence-bound candidates, queries stock/history/pricing, and drafts clarification emails — while **candidate acceptance, pricing, approval, and formal export always remain human-controlled**, with automatic approval invalidation on any subsequent change.
+An **agent-assisted quoting workbench** for general B2B, industrial, electronics, equipment, and spare-parts Requests for Quotation (RFQs). It transforms incoming inquiry emails (body text, spreadsheets, and text PDFs) into auditable, traceable quotes. The AI agent reads originals, extracts line-level evidence-bound candidates, queries stock/history/pricing, and drafts clarification emails — while **candidate acceptance, pricing, approval, and formal export always remain human-controlled**, with automatic approval invalidation on any subsequent change.
 
 ---
 
 ## Screenshots
 
-| Inquiry Agent Workbench (Live Tool Timeline + Original Mail) | Candidate Review (Field-Level Evidence Citations) |
+| Workspace Home & Inquiry Assistant (Todos + Inbox Cards) | Candidate Review (Field-Level Evidence Citations) |
 |---|---|
-| ![Inquiry Agent Workbench](docs/assets/agent.jpg) | ![Candidate Review](docs/assets/review.jpg) |
+| ![Workspace Home & Inquiry Assistant](docs/assets/home.jpg) | ![Candidate Review](docs/assets/review.jpg) |
 
 <details>
 <summary>More screenshots: Approval Gate & Snapshot Lock</summary>
@@ -23,7 +23,13 @@ An **agent-assisted quoting workbench** for aviation spare parts Requests for Qu
 
 ## Key Features
 
-- **Multi-Format Parsing with Line-Level Provenance**: Imports `EML`, `CSV`, `XLSX`, text `PDF`, and `TXT` (English and Chinese headers). Every extracted field (`rfq`, `part`, `quantity`, `unit`, `condition`, `due`, etc.) is tied to exact source spans that highlight directly in the side-by-side original pane.
+- **Jev Inbox Triage & Prompt-Injection Gate**:
+  - Account-scoped inquiry inbox powered by **Jev (`jev-latest`)** classifying emails into four fixed options (`new_rfq`, `revision`, `other`, `suspicious`) with calibrated probability bars and confidence scores.
+  - Automatically flags suspicious prompt-injection attempts, low confidence (`< 0.8`), or narrow top-2 margins (`< 0.2`) for mandatory human review/override; degrades gracefully to **`qwen3-rerank`** and then **local rule-based triage** when Jev is unavailable.
+- **Multi-Stage RAG Semantic Retrieval & Exact Reference Store**:
+  - Exact SQL lookups for known part numbers/SKUs (MatrixOne SQL first, SQLite local replica fallback) checking stock availability/shortages, historical quote deltas, and explicit alternates.
+  - Full **RAG pipeline** for natural-language descriptions and business rules: **`bge-m3`** (1024-dim embeddings) → **MatrixOne `VECF32` `COSINE_SIMILARITY`** (or local cosine vector replica) Top-5 recall → optional **`qwen3-rerank`** reranking → offline tokenized keyword fallback. Every executed stage is surfaced in the UI; retrieved records remain human-reviewed references only.
+- **Multi-Format Parsing with Line-Level Provenance**: Imports `EML`, `CSV`, `XLSX`, text `PDF`, and `TXT`, recognizing common English and Chinese B2B procurement headers (`RFQ`, `P/N`/`SKU`/`Item Code`/`Model`, `Description`/`Spec`, `Qty`, `Unit`, `Condition`, `Due Date`, `Requirements`, etc.). Every extracted field is tied to exact source spans that highlight directly in the side-by-side original pane.
 - **Least-Privilege Inquiry Agent (Human-in-the-Loop)**:
   - Separates workspace home tools from per-case tools for reading originals, proposing candidates, checking inventory/historical quotes/alternates, searching rules, inspecting revision diffs, and drafting clarification emails.
   - Exposes zero write tools for accepting formal rows, altering prices, approving quotes, or sending emails — preventing prompt-injection privilege escalation by construction.
@@ -44,12 +50,14 @@ An **agent-assisted quoting workbench** for aviation spare parts Requests for Qu
 
 ```mermaid
 flowchart LR
-    A[Original Mail & Attachments<br/>EML · XLSX · PDF · CSV] --> B[Inquiry Agent<br/>Extract · Price · Stock · Clarify Draft]
-    B --> C[Human Evidence Review<br/>Field-to-Line Verification]
-    C --> D[Formal RFQ Rows<br/>Zero Conflicts + Valid Price Match]
-    D --> E[Human Approval<br/>Snapshot & Identity Lock]
-    E --> F[Server-Verified Export<br/>HTML · CSV · XLSX · Reply Email]
-    D -. Any Edit / Appended Revision .-> G[Approval Invalidated<br/>Export Blocked 409]
+    Inbox["Inbox / Original Mail & Attachments<br/>EML · XLSX · PDF · CSV"] --> Triage["Jev 4-Way Triage<br/>new_rfq · revision · other · suspicious<br/>Low-Conf/Suspicious → Human · Rerank/Rule Fallback"]
+    Triage --> Agent["Inquiry Agent<br/>Read · Extract · Check Prices · Clarify Draft"]
+    RAG["RAG Retrieval Pipeline<br/>bge-m3 → MatrixOne VECF32 / Local Cosine<br/>→ qwen3-rerank / Keyword Fallback"] -. Fuzzy Parts · Stock · History · Alternates · Rules .-> Agent
+    Agent --> Review["Human Evidence Review<br/>Field-to-Line Verification"]
+    Review --> Formal["Formal RFQ Rows<br/>Zero Conflicts + Valid Price Match"]
+    Formal --> Approve["Human Approval<br/>Snapshot & Identity Lock"]
+    Approve --> Export["Server-Verified Export<br/>HTML · CSV · XLSX · ZH/EN Reply Email"]
+    Formal -. Any Edit / Appended Revision .-> Invalidate["Approval Invalidated<br/>Export Blocked 409"]
 ```
 
 ---
@@ -99,6 +107,8 @@ export RFQ_COOKIE_SECURE=0           # Use 0 for local HTTP, keep 1 behind HTTPS
 export RFQ_MODEL_URL="https://api.example.com/v1/chat/completions"
 export RFQ_MODEL_NAME="your-model-name"
 export RFQ_MODEL_KEY="your-api-key"
+export RFQ_JEV_KEY="your-jev-key"    # Optional: enable Jev 4-way inbox triage
+export RFQ_REFERENCE_RERANK=1        # Optional: enable qwen3-rerank in RAG search
 
 ./.venv/bin/python distribution/serve.py --model
 ```
