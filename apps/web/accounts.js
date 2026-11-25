@@ -8,17 +8,24 @@ function initAccountStorage(){
   kept=new RfqFormMemory(storageNamespace?scopedStorage(tabStorage,storageNamespace):tabStorage,()=>localDrafts.syncPolicy(),()=>current);
   renderLocalDraftStatus();
 }
-let accountReloading=false;
-function clearAccountMemory(){
-  rowDrafts.clear();pendingRowValues.clear();priceDrafts.clear();kept.clear();kept.clearPersisted();
-  if(authState.required)localDrafts.clear();
+let accountReloading=false,passwordFromDesk=false;
+function clearAccountMemory(clearLocal=false){
+  rowDrafts.clear();pendingRowValues.clear();priceDrafts.clear();kept.clear();
+  if(clearLocal){
+    kept.clearPersisted();
+    if(authState.required)localDrafts.clear();
+  }
   current=null;caseList=[];materials={caseId:null,revision:-1,files:[],error:''};interaction.navigate(null);
+  if(typeof window.clearWorkCaches==='function')window.clearWorkCaches();
+  if(typeof window.resetAgentHomeState==='function')window.resetAgentHomeState();
+  if(typeof window.resetOnsiteState==='function')window.resetOnsiteState();
+  if(typeof window.rfqSpotlight?.reset==='function')window.rfqSpotlight.reset(true);
   document.querySelectorAll('dialog[open]').forEach(d=>d.close());
-  for(const id of ['work','srcBody','queue','cases','landingCases','taskActivity','accountList','accountAudit'])$(id).replaceChildren();
+  for(const id of ['work','srcBody','queue','cases','landingCases','taskActivity','accountList','accountAudit'])$(id)?.replaceChildren();
   document.body.dataset.auth='pending';
 }
-function reloadAccount(broadcast=false){
-  if(accountReloading)return;accountReloading=true;clearAccountMemory();
+function reloadAccount(broadcast=false,clearLocal=false){
+  if(accountReloading)return;accountReloading=true;clearAccountMemory(clearLocal);
   if(broadcast)try{browserStorage?.setItem('rfq-account-event',String(Date.now())+Math.random())}catch{}
   location.reload();
 }
@@ -29,16 +36,19 @@ async function accountFetch(path,options={}){
     if(!['GET','HEAD','OPTIONS'].includes((options.method||'GET').toUpperCase()))headers.set('X-CSRF-Token',authState.csrf);
   }
   const response=await fetch(API+path,{...options,headers,credentials:'include',cache:'no-store'});
-  if(authState.user&&(response.status===401||response.status===409&&response.headers.get('X-RFQ-Session-Changed')==='1'))reloadAccount();
+  if(authState.user&&(response.status===401||response.status===409&&response.headers.get('X-RFQ-Session-Changed')==='1'))reloadAccount(false,false);
   return response;
 }
-function accountScreen(password=false,message=''){
+function accountScreen(password=false,message='',opts={}){
+  passwordFromDesk=Boolean(password&&opts.fromDesk&&authState.user&&!authState.user.must_change);
   document.body.dataset.auth=password?'password':'login';$('authScreen').hidden=false;
   $('loginForm').hidden=password;$('passwordForm').hidden=!password;
   $('judgeEntry').hidden=password;
   $('authTitle').textContent=password?'修改登录密码':'登录工作台';
   $('authIntro').textContent=password?(authState.user?.must_change?'首次登录，请先更换管理员提供的初始密码。':'修改后，所有设备都需要重新登录。'):'账号由管理员开通，登录后继续处理你的工作单。';
+  if($('passwordBack'))$('passwordBack').textContent=passwordFromDesk?'返回工作台':'返回登录';
   $('authError').textContent=message;$('authError').className='msg';
+  window.rfqSpotlight?.sync?.();
 }
 async function initializeAccount(){
   let state;
@@ -88,11 +98,20 @@ $('passwordForm').onsubmit=async e=>{
 };
 async function logoutAccount(){
   if((rowDrafts.size||priceDrafts.size||kept.size)&&!await RfqDialog.confirm({title:'退出登录',body:'有尚未提交的填写。退出将清除本机暂存，服务器数据不变。',ok:'退出登录',tone:'danger'}))return;
-  try{await request('/auth/logout',{method:'POST'});reloadAccount(true)}catch(e){notice(e.message,true)}
+  try{await request('/auth/logout',{method:'POST'});reloadAccount(true,true)}catch(e){notice(e.message,true)}
 }
 $('logout').onclick=logoutAccount;
-$('passwordBack').onclick=logoutAccount;
-$('changePassword').onclick=()=>{ $('accountMenu').open=false;document.querySelectorAll('dialog[open]').forEach(d=>d.close());accountScreen(true); };
+$('passwordBack').onclick=()=>{
+  if(passwordFromDesk&&authState.user&&!authState.user.must_change){
+    passwordFromDesk=false;
+    $('passwordForm').reset();$('authError').textContent='';
+    $('authScreen').hidden=true;document.body.dataset.auth='ready';
+    window.rfqSpotlight?.sync?.();
+    return;
+  }
+  logoutAccount();
+};
+$('changePassword').onclick=()=>{ $('accountMenu').open=false;document.querySelectorAll('dialog[open]').forEach(d=>d.close());accountScreen(true,'',{fromDesk:true}); };
 window.addEventListener('storage',e=>{if(e.key==='rfq-account-event'&&authState.required)reloadAccount()});
 window.addEventListener('pageshow',e=>{if(e.persisted&&authState.required)reloadAccount()});
 

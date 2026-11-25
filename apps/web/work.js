@@ -13,7 +13,7 @@ function renderWork(){
   (views[focus?.type]||viewMissing)();
   restoreKept(w);
   if(authState.user)qsa('[data-keep$="actor"]').forEach(el=>{el.value=authState.user.name+' ('+(authState.user.role==='demo'?'体验账号':authState.user.username)+')';el.readOnly=true;kept.delete(keepKey(el.dataset.keep))});
-  if(authState.user?.role==='demo')qsa('input[type=file]').forEach(el=>el.disabled=true);
+  if(authState.user?.role==='demo')qsa('input[type=file]').forEach(el=>{el.disabled=true;const lbl=el.closest('label');if(lbl){lbl.classList.add('is-disabled');lbl.setAttribute('aria-disabled','true');lbl.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')}});
   const scope=current.id+'|'+focusKey()+'|',stale=kept.stale(scope,current).filter(([k])=>!k.endsWith('|p:catalog'));
   if(stale.length){const note=document.createElement('details');note.className='note warn';const summary=document.createElement('summary');summary.textContent='有旧版本未提交填写，保留供对照；确认选项不会自动恢复';note.append(summary);for(const [k,v] of stale){const line=document.createElement('p');line.className='hint';line.textContent=k.split('|').pop()+'：'+(typeof v==='boolean'?'旧确认项，须重新核对':v);note.append(line)}const discard=document.createElement('button');discard.type='button';discard.className='btn btn-sm';discard.textContent='放弃这些旧版填写';discard.onclick=()=>{for(const [k] of stale)kept.delete(k);renderWork()};note.append(discard);w.querySelector('.w-body')?.prepend(note)}
   qsa('[data-refresh-case]').forEach(b=>b.onclick=()=>run(()=>openCase(current.id)));
@@ -206,18 +206,18 @@ function viewCatalog(){
   </div>`;
   if(![...$('priceChoice').options].some(o=>o.value===kept.get(keepKey('c:choice'))))kept.delete(keepKey('c:choice'));
   $('priceUpload').onchange=e=>run(()=>startPriceImport(e.target));
-  $('loadPrices').onclick=()=>run(async()=>{if(priceDrafts.has(c.id))throw Error('有待保存价表修改，请先保存或放弃');await change('demo-prices',{},(after,before)=>RfqUiState.priceNotice(after,before)+' 已载入示例价表，缺价行仍需人工核价。')});
-  if(d){$('savePrices').onclick=()=>run(savePrices);$('discardPrices').onclick=()=>run(async()=>{if(await RfqDialog.confirm({title:'放弃待保存的价表修改',body:'仅丢弃本次待保存的修改，已生效价表与相关批准不变。',ok:'放弃修改',tone:'danger'})){clearPriceDraft(c.id);render()}})}
+  $('loadPrices').onclick=()=>run(async()=>{if(priceDrafts.has(c.id))throw Error('有待保存价表修改，请先保存或放弃');kept.delete(keepKey('c:json'));await change('demo-prices',{},(after,before)=>RfqUiState.priceNotice(after,before)+' 已载入示例价表，缺价行仍需人工核价。')});
+  if(d){$('savePrices').onclick=()=>run(savePrices);$('discardPrices').onclick=()=>run(async()=>{if(await RfqDialog.confirm({title:'放弃待保存的价表修改',body:'仅丢弃本次待保存的修改，已生效价表与相关批准不变。',ok:'放弃修改',tone:'danger'})){clearPriceDraft(c.id);kept.delete(keepKey('c:json'));render()}})}
   const fill=i=>{const p=list[i];for(const k of priceKeyList)setKeep(W().querySelector(`[data-keep="c:${k}"]`),p[k]??'');$('manualStatus').textContent=p.evidence?'注意：修改后作为新录入价源，不再沿用原价目原件定位，请填写新的来源依据。':''};
   $('priceChoice').onchange=()=>{if($('priceChoice').value!=='new')fill(Number($('priceChoice').value))};
   qsa('[data-pedit]').forEach(b=>b.onclick=()=>{setKeep($('priceChoice'),b.dataset.pedit);fill(Number(b.dataset.pedit));W().querySelector('[data-keep="c:amount"]').focus()});
-  qsa('[data-pwithdraw]').forEach(b=>b.onclick=()=>{const d=ensurePriceDraft(),i=Number(b.dataset.pwithdraw),[p]=d.list.splice(i,1),[mark]=d.marks.splice(i,1);if(mark!=='new')d.removed.push(p);d.editVersion++;if(!d.marks.some(Boolean)&&!d.removed.length)clearPriceDraft(c.id);else persistPriceDraft(c.id,d);kept.delete(keepKey('c:choice'));render();notice('已加入待撤回；保存价表新版本后相关旧批准失效。')});
+  qsa('[data-pwithdraw]').forEach(b=>b.onclick=()=>{const d=ensurePriceDraft(),i=Number(b.dataset.pwithdraw),[p]=d.list.splice(i,1),[mark]=d.marks.splice(i,1);if(mark!=='new')d.removed.push(p);d.editVersion++;kept.delete(keepKey('c:json'));if(!d.marks.some(Boolean)&&!d.removed.length)clearPriceDraft(c.id);else persistPriceDraft(c.id,d);kept.delete(keepKey('c:choice'));render();notice('已加入待撤回；保存价表新版本后相关旧批准失效。')});
   $('appendManual').onclick=()=>run(()=>{
     const p=readPrice('c:'),d=ensurePriceDraft(),choice=$('priceChoice').value;
     if(choice==='new'){d.list.push(p);d.marks.push('new')}else{const i=Number(choice);d.list[i]=p;d.marks[i]=d.marks[i]==='new'?'new':'edit'}
-    d.editVersion++;persistPriceDraft(current.id,d);render();notice('已加入待保存价表；点击“保存价表新版本”后才生效。');
+    d.editVersion++;kept.delete(keepKey('c:json'));persistPriceDraft(current.id,d);render();notice('已加入待保存价表；点击“保存价表新版本”后才生效。');
   });
-  $('applyPriceJson').onclick=()=>run(()=>{let list;try{list=JSON.parse($('priceJson').value)}catch{throw Error('JSON 格式错误，未改变待保存价表')}if(!Array.isArray(list))throw Error('完整价表须为数组');const d=ensurePriceDraft();d.list=list;d.marks=list.map(()=>'edit');d.removed=[];d.editVersion++;persistPriceDraft(current.id,d);render();notice('已用 JSON 替换待保存价表；保存后由服务端校验。')});
+  $('applyPriceJson').onclick=()=>run(()=>{let list;try{list=JSON.parse($('priceJson').value)}catch{throw Error('JSON 格式错误，未改变待保存价表')}if(!Array.isArray(list))throw Error('完整价表须为数组');const d=ensurePriceDraft();d.list=list;d.marks=list.map(()=>'edit');d.removed=[];d.editVersion++;kept.delete(keepKey('c:json'));persistPriceDraft(current.id,d);render();notice('已用 JSON 替换待保存价表；保存后由服务端校验。')});
 }
 const priceDraftKey=id=>id+'|prices:|p:catalog';
 function persistPriceDraft(id,d){kept.set(priceDraftKey(id),JSON.stringify({revision:d.ctx.revision,priceVersion:d.priceVersion,list:d.list,marks:d.marks,removed:d.removed,editVersion:d.editVersion}))}
@@ -236,30 +236,51 @@ async function savePrices(){
   if(owner.ctx.caseId!==ctx.caseId||owner.ctx.revision!==ctx.revision)throw Error('待保存价表基于旧工作版本，不能覆盖当前价表；请放弃后重新加入');
   const done=busyButton($('savePrices'),'保存中…');
   try{const applied=await change('prices',{prices:owner.list},RfqUiState.priceNotice,ctx);
-    if(applied&&priceDrafts.get(owner.ctx.caseId)===owner){if(owner.editVersion===editVersion)clearPriceDraft(owner.ctx.caseId);else{persistPriceDraft(owner.ctx.caseId,owner);notice('已提交价表已处理；等待期间新增修改仍保留为草稿，请核对当前版本后再保存。',true)}}
+    if(applied&&priceDrafts.get(owner.ctx.caseId)===owner){kept.delete(owner.ctx.caseId+'|prices:|c:json');if(owner.editVersion===editVersion)clearPriceDraft(owner.ctx.caseId);else{persistPriceDraft(owner.ctx.caseId,owner);notice('已提交价表已处理；等待期间新增修改仍保留为草稿，请核对当前版本后再保存。',true)}}
   }finally{done();if(current?.id===owner.ctx.caseId)render()}
 }
 let intake=null,pricePreviewRequest=0;
+function formatIntakeError(e){
+  if(typeof e==='string')return e;
+  if(e&&typeof e==='object'){
+    const msg=e.message||e.detail||e.error||'';
+    if(e.line!=null&&msg)return `第 ${e.line} 行：${msg}`;
+    if(msg)return String(msg);
+  }
+  return String(e??'');
+}
+window.rfqFormatIntakeError=formatIntakeError;
 async function startPriceImport(input){
   const f=input.files[0];if(!f)return;
   const ctx=interaction.capture(current),requestId=++pricePreviewRequest,data=new FormData();data.append('revision',ctx.revision);data.append('file',f);let result;
   try{result=await request(`/cases/${ctx.caseId}/prices/import/preview`,{method:'POST',body:data})}catch(e){input.value='';if(interaction.active(ctx,current)&&requestId===pricePreviewRequest)throw e;activity(ctx,'价目预览失败：'+e.message,true);return}
   input.value='';
   if(!interaction.active(ctx,current)||current.revision!==ctx.revision||requestId!==pricePreviewRequest){activity(ctx,'价目预览已生成但未应用到当前页面，请回原工作单重新选择原件审阅');return}
-  intake={...result,ctx,editVersion:0};$('importMode').value='append';$('importReplaceConfirm').checked=false;
+  intake={...result,ctx,editVersion:0};
+  $('importMode').value='append';$('importReplaceConfirm').checked=false;$('importReason').value='';
+  if(authState.user){
+    $('importActor').value=authState.user.name+' ('+(authState.user.role==='demo'?'体验账号':authState.user.username)+')';
+    $('importActor').readOnly=true;
+  }else{
+    $('importActor').value='';
+    $('importActor').readOnly=false;
+  }
   $('importSummary').textContent=`${intake.filename} · ${intake.rows.length} 行 · ${intake.errors.length} 项错误。预览尚未改变价目；确认接纳后才生效。`;
-  $('importRows').innerHTML=intake.rows.map(r=>`<tr><td class="mono">${esc(r.location)}</td><td class="mono">${esc(r.price.part)} / ${esc(r.price.unit)} / ${esc(r.price.condition)}</td><td class="mono">${esc(r.price.amount)} ${esc(r.price.currency)}</td><td>${esc(r.price.valid_from)} 至 ${esc(r.price.valid_until)}<br><small>${esc(r.price.source)}</small></td><td>${r.errors.length?`<span class="msg error">${r.errors.map(esc).join('<br>')}</span>`:'字段有效；请核对授权及生效范围'}</td></tr>`).join('');
-  $('acceptPrices').disabled=Boolean(intake.errors.length);$('importError').textContent=intake.errors.length?intake.errors.join('；'):'';$('priceImport').showModal();
+  $('importRows').innerHTML=intake.rows.map(r=>`<tr><td class="mono">${esc(r.location)}</td><td class="mono">${esc(r.price.part)} / ${esc(r.price.unit)} / ${esc(r.price.condition)}</td><td class="mono">${esc(r.price.amount)} ${esc(r.price.currency)}</td><td>${esc(r.price.valid_from)} 至 ${esc(r.price.valid_until)}<br><small>${esc(r.price.source)}</small></td><td>${r.errors.length?`<span class="msg error">${r.errors.map(x=>esc(formatIntakeError(x))).join('<br>')}</span>`:'字段有效；请核对授权及生效范围'}</td></tr>`).join('');
+  $('acceptPrices').disabled=Boolean(intake.errors.length);$('importError').textContent=intake.errors.length?intake.errors.map(formatIntakeError).filter(Boolean).join('；'):'';$('priceImport').showModal();
 }
 $('priceImport').addEventListener('input',()=>{if(intake)intake.editVersion++});
 $('cancelImport').onclick=$('cancelImportX').onclick=()=>$('priceImport').close();
 $('acceptPrices').onclick=async()=>{
-  const owner=intake,editVersion=owner.editVersion;
+  const owner=intake;if(!owner)return;
+  const editVersion=owner.editVersion;
+  const done=busyButton($('acceptPrices'),'保存中…');
   try{
     if(priceDrafts.has(owner.ctx.caseId))throw Error('价格依据总表有待保存修改，请先保存或放弃，再接纳价目原件');
     if($('importMode').value==='replace'&&!$('importReplaceConfirm').checked)throw Error('请勾选明确替换全部价目的确认');
     if(await change('prices/import/accept',{preview_id:owner.id,mode:$('importMode').value,actor:$('importActor').value,reason:$('importReason').value},'价目原件已审阅接纳；来源按表/行绑定，相关批准重新核验。',owner.ctx)&&intake===owner){if(owner.editVersion===editVersion)$('priceImport').close();else notice('已提交的价目审阅已完成；等待期间新增填写未保存，请核对新版本。')}
   }catch(e){if(owner===intake&&interaction.active(owner.ctx,current))$('importError').textContent=e.message;else activity(owner.ctx,'价目接纳失败：'+e.message,true)}
+  finally{done()}
 };
 
 /* ---------- clarification timeline ---------- */
@@ -367,13 +388,15 @@ function viewClarifications(){
 function viewCandidate(){
   const [bid,cid]=focus.id.split(':'),b=(current.candidate_batches||[]).find(b=>b.id===bid),c=b?.candidates.find(x=>x.id===cid);if(!c)return viewMissing();
   const fresh=b.expected_revision===current.revision&&c.status==='pending';
+  const keptOk=name=>{const k=keepKey(name),v=kept.get(k);return v!==undefined&&kept.compatible(k,current)?v:undefined};
   // A candidate whose RFQ and part match exactly one formal row most likely revises it; start there and leave the check to the reviewer.
   const same=current.rows.filter(r=>!r.excluded&&c.fields.rfq&&r.rfq===c.fields.rfq&&r.part===c.fields.part),guess=same.length===1?same[0]:null;
-  const mode=kept.get(keepKey('mode'))||(guess?'partial':'full'),target=kept.get(keepKey('target'))??(guess&&mode==='partial'?guess.id:''),base=current.rows.find(r=>r.id===target),partial=mode==='partial';
-  const guessed=!!guess&&target===guess.id&&!kept.has(keepKey('target'));
+  const keptTarget=keptOk('target');
+  const mode=keptOk('mode')||(guess?'partial':'full'),target=keptTarget??(guess&&mode==='partial'?guess.id:''),base=current.rows.find(r=>r.id===target),partial=mode==='partial';
+  const guessed=!!guess&&target===guess.id&&keptTarget===undefined;
   const entries=['rfq','part','quantity','unit','condition','due','description','requirements','priority'].map(f=>[f,fieldNames[f]]);
-  const optional=([f])=>!partial&&['description','requirements','priority'].includes(f)&&!c.fields[f]&&!kept.get(keepKey('f:'+f));
-  const field=([f,l])=>{const op=kept.get(keepKey('op:'+f))||(guessed&&f in c.fields&&!['rfq','part'].includes(f)&&c.fields[f]!==String(base[f]??'')?'update':'inherit'),enabled=!partial||op==='update',src=c.field_sources[f];return `<div class="cf"><label>${l}${partial?`<select data-keep="op:${f}" data-op="${f}" ${['rfq','part'].includes(f)?'disabled':''}><option value="inherit">继承基础值</option>${f in c.fields&&!['rfq','part'].includes(f)?`<option value="update" ${op==='update'?'selected':''}>更新本次值</option>`:''}${!['rfq','part'].includes(f)?'<option value="clear">明确清空</option>':''}</select>`:''}<input data-keep="f:${f}" data-field="${f}" value="${esc(c.fields[f]||'')}" class="mono" ${enabled?'':'disabled'}></label>${partial?`<small>基础「<span class="mono">${esc(base?.[f]??'请选择目标行')}</span>」</small>`:''}<small>${src?`<button type="button" class="src-link inline" data-srcfield="${f}" title="${esc(src.file+' / '+src.location)}">${esc(srcShort(src.location))}</button>「<span class="mono">${esc(src.quote)}</span>」`:'原文未提供'}</small></div>`};
+  const optional=([f])=>!partial&&['description','requirements','priority'].includes(f)&&!c.fields[f]&&!keptOk('f:'+f);
+  const field=([f,l])=>{const op=keptOk('op:'+f)||(guessed&&f in c.fields&&!['rfq','part'].includes(f)&&c.fields[f]!==String(base[f]??'')?'update':'inherit'),enabled=!partial||op==='update',src=c.field_sources[f];return `<div class="cf"><label>${l}${partial?`<select data-keep="op:${f}" data-op="${f}" ${['rfq','part'].includes(f)?'disabled':''}><option value="inherit">继承基础值</option>${f in c.fields&&!['rfq','part'].includes(f)?`<option value="update" ${op==='update'?'selected':''}>更新本次值</option>`:''}${!['rfq','part'].includes(f)?'<option value="clear">明确清空</option>':''}</select>`:''}<input data-keep="f:${f}" data-field="${f}" value="${esc(c.fields[f]||'')}" class="mono" ${enabled?'':'disabled'}></label>${partial?`<small>基础「<span class="mono">${esc(base?.[f]??'请选择目标行')}</span>」</small>`:''}<small>${src?`<button type="button" class="src-link inline" data-srcfield="${f}" title="${esc(src.file+' / '+src.location)}">${esc(srcShort(src.location))}</button>「<span class="mono">${esc(src.quote)}</span>」`:'原文未提供'}</small></div>`};
   const fields=entries.filter(e=>!optional(e)).map(field).join(''),extras=entries.filter(optional);
   W().innerHTML=head('修订候选 · '+esc(engineName(b.engine)),label({rfq:c.fields.rfq,part:c.fields.part}),{mono:true,sub:`这是${esc(engineName(b.engine))}提出的候选，还不是正式询价。请核对每个值，以及它属于哪一张询价。`,chip:`<span class="status-text ${fresh?'is-candidate':'is-old'}">${fresh?'候选 · 未生效':c.status!=='pending'?({accepted:'已接纳',rejected:'已拒绝'}[c.status]||c.status):'旧批次 · 只读'}</span>`})+
   `<div class="w-body">${fresh?'<p class="candidate-banner"><b>候选值尚未进入正式数据</b><span>逐字段核对原文、目标行和修订范围后，由你明确接纳或拒绝。</span></p>':'<p class="note bad">此候选不能再接纳：已处理或工作版本已变化，请重新生成候选。</p>'}
@@ -390,21 +413,36 @@ function viewCandidate(){
     <div class="btn-row"><button type="button" class="btn btn-primary" id="candAccept">接纳为正式行</button><button type="button" class="btn" id="candAcceptBatch">接纳本批所有无争议候选</button><button type="button" class="btn" id="candReject">拒绝候选</button></div>
   </fieldset></div>`;
   const rerender=()=>renderWork();$('candMode').onchange=$('candTarget').onchange=rerender;qsa('[data-op]').forEach(s=>s.onchange=rerender);
+  const candButtons=()=>[$('candAccept'),$('candAcceptBatch'),$('candReject')].filter(Boolean);
+  let candSubmitting=false;
+  const lockCand=(activeBtn,text)=>{
+    candSubmitting=true;
+    const done=busyButton(activeBtn,text);
+    const others=candButtons().filter(x=>x!==activeBtn);
+    others.forEach(x=>x.disabled=true);
+    return ()=>{candSubmitting=false;done();others.forEach(x=>{if(x.isConnected)x.disabled=false})};
+  };
   const val=k=>W().querySelector(`[data-keep="${k}"]`),submit=action=>run(async()=>{
+    if(candSubmitting)return;
     const snap=snapshotKept(W()),m=val('mode').value,tgt=val('target').value,baseRow=current.rows.find(r=>r.id===tgt),ops=qsa('[data-op]');
     const values={action,mode:m,fields:Object.fromEntries(qsa('[data-field]').filter(e=>!e.disabled).map(e=>[e.dataset.field,e.value])),actor:val('actor').value,reason:val('reason').value,target_row_id:tgt,confirm_association:val('assoc').checked,confirm_reassignment:val('reassign').checked,confirmed_fields:[val('cunit').checked?'unit':null,val('ccond').checked?'condition':null].filter(Boolean)};
     if(m==='partial')Object.assign(values,{base_revision:current.revision,base_row_revision:baseRow?.revision,update_fields:ops.filter(e=>e.value==='update').map(e=>e.dataset.op),clear_fields:ops.filter(e=>e.value==='clear').map(e=>e.dataset.op),clear_reason:val('clear').value});
     $('candError').textContent='';
+    const unlock=lockCand(action==='accept'?$('candAccept'):$('candReject'),action==='accept'?'接纳中…':'拒绝中…');
     try{if(await change(`candidates/${bid}/${cid}/review`,values,action==='accept'?'已显式接纳；请核查受影响批准、继承出处与价源。':'候选已拒绝，正式行未改变。')){releaseKept(snap);const n=firstFocus();if(n)setFocus(n.type,n.id)}}
     catch(e){if($('candError'))$('candError').textContent=e.message;else throw e}
+    finally{unlock()}
   });
   $('candAccept').onclick=()=>submit('accept');
   $('candAcceptBatch').onclick=()=>run(async()=>{
+    if(candSubmitting)return;
     const snap=snapshotKept(W());$('candError').textContent='';
+    const unlock=lockCand($('candAcceptBatch'),'批量接纳中…');
     try{if(await change(`candidates/${bid}/accept-batch`,{actor:val('actor').value,reason:val('reason').value,confirm_association:val('assoc').checked},'已接纳无争议候选；同一行有多个值或数量待修正的，仍需逐条处理。')){releaseKept(snap);const n=firstFocus();if(n)setFocus(n.type,n.id)}}
     catch(e){if($('candError'))$('candError').textContent=e.message;else throw e}
+    finally{unlock()}
   });
-  $('candReject').onclick=()=>{if(!val('reason').value.trim()){$('candError').textContent='请在“裁定理由”写明拒绝理由';return}submit('reject')};
+  $('candReject').onclick=()=>{if(candSubmitting)return;if(!val('reason').value.trim()){$('candError').textContent='请在“裁定理由”写明拒绝理由';return}submit('reject')};
 }
 
 /* ---------- materials ---------- */
@@ -434,18 +472,18 @@ function viewWarnings(){
 function sumDecimal(values){const d=Math.max(0,...values.map(v=>(String(v).split('.')[1]||'').length));const n=values.reduce((a,v)=>{const [i,f='']=String(v).split('.');return a+BigInt(i+f.padEnd(d,'0'))},0n);const t=(n<0n?-n:n).toString().padStart(d+1,'0');return (n<0n?'-':'')+(d?t.slice(0,-d)+'.'+t.slice(-d):t)}
 function approveTotals(rows){const by={};for(const r of rows)if(r.price&&r.total&&/^\d+(\.\d+)?$/.test(r.total))(by[r.price.currency]||=[]).push(r.total);const cur=Object.keys(by).sort();if(!cur.length)return '';const missingN=rows.filter(r=>!r.total).length;return `<tfoot><tr class="total"><th colspan="5">合计（按币种，不折汇）${missingN?` · 另有 ${missingN} 行待报价`:''}</th><td class="mono" colspan="3"><b>${cur.map(c=>esc(c+' '+sumDecimal(by[c]))).join('　')}</b></td></tr></tfoot>`}
 function viewApprove(){
-  const c=current,s=summarize(c),blocked=!s.active.length||s.issues.length>0||s.needsReview||s.dirty>0||priceDrafts.has(c.id);
+  const c=current,s=summarize(c),pendingCands=s.cands.length||s.pendingCands||0,blocked=!s.active.length||s.issues.length>0||s.needsReview||pendingCands>0||s.dirty>0||priceDrafts.has(c.id);
   const checks=[
-    [!s.content.length&&!s.needsReview,'内容核对',s.content.length?`${s.content.length} 行待核对`:s.needsReview?'解析警告未核查':'通过','content'],
+    [!s.content.length&&!s.needsReview&&!pendingCands,'内容核对',pendingCands?`${pendingCands} 条候选待审`:s.content.length?`${s.content.length} 行待核对`:s.needsReview?'解析警告未核查':'通过','content'],
     [!s.openQs.length,'澄清',(c.clarifications||[]).length?(s.openQs.length?`${s.openQs.length} 项未解决`:'全部结束'):'未登记','clarify'],
     [!s.priced.length,'唯一有效价格依据',s.priced.length?`${s.priced.length} 行缺少或有多个有效价源`:'全部具备','price'],
     [!s.dirty&&!priceDrafts.has(c.id),'本页未保存修改',s.dirty||priceDrafts.has(c.id)?`${s.dirty} 份行草稿${priceDrafts.has(c.id)?' · 价表待保存':''}，批准前先保存或放弃`:'无',''],
   ];
-  W().innerHTML=head('批准',s.ready?'当前版本已批准':s.stale.length?`${s.stale.length} 行旧批准已失效`:'批准当前版本',{sub:`批准绑定：工作版本 <b class="mono">${c.revision}</b> · 价表 <b class="mono">v${c.price_version}</b> · 当前输入、价源与澄清状态。之后任何变化都会使批准失效。`})+
+  W().innerHTML=head('批准',s.ready?'当前版本已批准':s.stale.length?`${s.stale.length} 行旧批准已失效`:s.needsReapprove?'整单批准快照已失效，需重新批准':'批准当前版本',{sub:`批准绑定：工作版本 <b class="mono">${c.revision}</b> · 价表 <b class="mono">v${c.price_version}</b> · 当前有效行集合、原件快照、价源与澄清状态。之后任何变化都会使批准失效。`})+
   `<div class="w-body"><ul class="checks-list">${checks.map(([ok,l,t,g])=>`<li class="${ok?'ok':'bad'}"><span class="tick">${ok?'✓':'!'}</span><b>${l}</b><span>${esc(t)}</span>${!ok&&g?`<button type="button" class="btn btn-sm btn-ghost" data-gate-jump="${g}">处理</button>`:''}</li>`).join('')}</ul>
   <div class="table-wrap"><table class="grid"><thead><tr><th>询价号</th><th>件号</th><th>数量</th><th>件状</th><th>单价</th><th>小计</th><th>价源</th><th>批准</th></tr></thead><tbody>${s.active.map(r=>`<tr><td class="mono">${missing(r.rfq,'询价号')}</td><td class="mono">${missing(r.part,'件号')}</td><td class="mono">${esc(r.quantity)} ${missing(r.unit,'单位')}</td><td class="mono">${missing(r.condition,'件状')}</td><td class="mono">${r.price?esc(r.price.currency+' '+r.price.amount):'—'}</td><td class="mono">${esc(r.total||'—')}</td><td>${r.price?`<span class="chip ${r.price.kind==='synthetic'?'tone-warn':''}">${esc(kindLabel(r.price.kind))}</span>`:'<span class="chip tone-price">待报价</span>'}</td><td>${r.approved?`<span class="chip tone-ok">${esc(r.approval.actor)} · ${esc(r.approval.date)}</span>`:r.stale?'<span class="chip tone-warn">旧批准失效</span>':r.issues.length?`<span class="chip tone-bad">${r.issues.length} 项阻断</span>`:'<span class="chip tone-ready">待批准</span>'}</td></tr>`).join('')||'<tr><td colspan="8">没有有效询价行</td></tr>'}</tbody>${approveTotals(s.active)}</table></div>
-  <section class="card approve-box"><label>批准人<input data-keep="g:actor" id="actor" autocomplete="name" placeholder="批准人姓名"></label><button type="button" class="btn btn-primary" id="approve" ${blocked||s.ready?'disabled':''}>${s.ready?'已批准当前版本':s.stale.length?'重新批准当前版本':'批准当前版本'}</button>
-  <p class="msg ${blocked?'error':''}" id="readiness">${blocked?(s.dirty||priceDrafts.has(c.id)?'本单有未保存行或价表草稿，请先保存或放弃；尚未批准。':s.active.length?`${s.issues.length} 行仍有阻断${s.needsReview?'，解析警告未核查':''}；全部通过核验后才能批准。`:'没有有效询价行。'):s.ready?'可前往输出报价响应。':'核验已通过，填写批准人后可批准。'}</p>${s.ready?'<button type="button" class="btn" data-goto="output|o">前往输出 →</button>':''}</section></div>`;
+  <section class="card approve-box"><label>批准人<input data-keep="g:actor" id="actor" autocomplete="name" placeholder="批准人姓名"></label><button type="button" class="btn btn-primary" id="approve" ${blocked||s.ready?'disabled':''}>${s.ready?'已批准当前版本':(s.stale.length||s.needsReapprove)?'重新批准当前版本':'批准当前版本'}</button>
+  <p class="msg ${blocked?'error':''}" id="readiness">${blocked?(s.dirty||priceDrafts.has(c.id)?'本单有未保存行或价表草稿，请先保存或放弃；尚未批准。':pendingCands?`仍有 ${pendingCands} 条候选待审；请先接纳或拒绝后再批准。`:s.active.length?`${s.issues.length} 行仍有阻断${s.needsReview?'，解析警告未核查':''}；全部通过核验后才能批准。`:'没有有效询价行。'):s.ready?'可前往输出报价响应。':s.needsReapprove?'有效行集合、原件或核查结论已变更，旧整单批准已失效；核对无误后请重新批准。':'核验已通过，填写批准人后可批准。'}</p>${s.ready?'<button type="button" class="btn" data-goto="output|o">前往输出 →</button>':''}</section></div>`;
   qsa('[data-gate-jump]').forEach(b=>b.onclick=()=>document.querySelector(`[data-gate="${b.dataset.gateJump}"]`)?.click());
   if(authState.user){$('actor').removeAttribute('data-keep');$('actor').value=authState.user.role==='demo'?authState.user.name+'（访客 '+authState.user.username.slice(5,13)+'）':authState.user.name+' ('+authState.user.username+')';$('actor').readOnly=true;if(!blocked&&!s.ready)$('readiness').textContent='核验已通过，将以当前登录账号记录批准。'}
   $('approve').onclick=()=>run(async()=>{
@@ -461,7 +499,7 @@ function viewOutput(){
   const c=current,s=summarize(c),snap=quoteSnapshots.get(c.id),fresh=snap&&snap.revision===c.revision;
   W().innerHTML=head('输出',s.ready?'报价响应':'报价响应未就绪',{sub:s.ready?`只输出当前已批准的工作版本 <b class="mono">${c.revision}</b> / 价表 <b class="mono">v${c.price_version}</b>；导出时服务端再次核验版本与有效期，金额以服务端为准。`:'当前版本未全部批准，正式输出被阻止。'})+
   `<div class="w-body">${s.ready?`<div class="btn-row"><button type="button" class="btn btn-primary" id="quotePreview">${fresh?'重新生成预览':'生成报价响应预览'}</button><button type="button" class="btn" id="downloadHtml" ${fresh?'':'disabled'}>下载此版 HTML</button><button type="button" class="btn" id="printHtml" ${fresh?'':'disabled'}>打印</button><button type="button" class="btn" id="exportCsv">导出 CSV</button></div>
-    ${fresh?`<p class="note">预览绑定工作版本 ${snap.revision} / 价表 v${snap.priceVersion}，生成于 ${esc(snap.at)}。之后任何变更需重新生成；预览不写入正式输出实录。</p><iframe id="quoteFrame" class="quote" title="报价响应预览"></iframe>`:'<p class="hint">点击生成后由服务端核验并渲染报价响应。</p>'}`:
+    ${fresh?`<p class="note">预览绑定工作版本 ${snap.revision} / 价表 v${snap.priceVersion}，生成于 ${esc(snap.at)}。之后任何变更需重新生成；预览不写入正式输出实录。</p><iframe id="quoteFrame" class="quote" sandbox="allow-same-origin allow-modals" title="报价响应预览"></iframe>`:'<p class="hint">点击生成后由服务端核验并渲染报价响应。</p>'}`:
     `<p class="note bad">${s.stale.length?`${s.stale.length} 行旧批准已失效（输入、价源或日期变化）。`:''}${s.issues.length?`${s.issues.length} 行仍有阻断。`:''}旧批准或历史版本不能导出当前值。</p><button type="button" class="btn" data-goto="approve|a">前往批准</button>`}</div>`;
   if(!s.ready)return;
   if(fresh)$('quoteFrame').srcdoc=snap.html;
@@ -472,9 +510,10 @@ function viewOutput(){
       if(!interaction.active(ctx,current)||current.revision!==ctx.revision){activity(ctx,'正式输出已由服务端核验并记录；未在其他工作单下载或打印，请回原单查看实录。');return}
       const blob=await response.blob();
       if(!interaction.active(ctx,current)||current.revision!==ctx.revision){activity(ctx,'输出文件已取得，页面已切换或版本已变化，未自动下载或打印。');return}
-      if(print){const frame=$('quoteFrame');if(!frame)return;const loaded=new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));frame.srcdoc=await blob.text();await loaded;if(!interaction.active(ctx,current)||current.revision!==ctx.revision||!frame.isConnected)return;frame.contentWindow.print();notice('已重新核验并登记打印输出；请在打印窗口确认，系统不能确认纸张结果。','ok')}
+      if(print){const frame=$('quoteFrame');if(!frame)return;const loaded=new Promise(resolve=>{let settled=false;const finish=()=>{if(!settled){settled=true;clearTimeout(timer);resolve()}};const timer=setTimeout(finish,5000);frame.addEventListener('load',finish,{once:true})});frame.srcdoc=await blob.text();await loaded;if(!interaction.active(ctx,current)||current.revision!==ctx.revision||!frame.isConnected)return;frame.contentWindow.print();notice('已重新核验并登记打印输出；请在打印窗口确认，系统不能确认纸张结果。','ok')}
       else{download(blob,`quote-${ctx.caseId}-r${ctx.revision}.${format}`);notice(`已正式导出工作版本 ${ctx.revision} 的 ${format.toUpperCase()}；已记录输出事件。`,'ok')}
       noteGuideExport(ctx);refreshList();
+      try{const updated=await request('/cases/'+encodeURIComponent(ctx.caseId));if(interaction.active(ctx,current)&&updated.revision>=current.revision){current=updated;if(focus?.type==='log')renderWork()}}catch{}
     }catch(e){if(interaction.active(ctx,current))throw e;activity(ctx,'正式输出失败或结果未知：'+e.message,true)}finally{interaction.finish(task);done()}
   });
   if(fresh){$('downloadHtml').onclick=()=>formal('html',$('downloadHtml'));$('printHtml').onclick=()=>formal('html',$('printHtml'),true)}
@@ -509,29 +548,94 @@ run(boot);
 
 
 /* ---------- 询价 Agent ---------- */
-const agentChat={caseId:null,turns:[],busy:false,consent:false,text:'',pending:'',loaded:false};
-const agentToolNames={get_case_state:'读取工作单',read_original:'读原文',extract_candidates:'提取候选',add_mail_to_case:'把邮件加入工作单',check_prices:'查价',explain_row:'查询价行依据',draft_clarification:'起草澄清邮件',version_history:'查版本历史',search_rules:'检索规则',lookup_stock:'查库存',search_parts:'语义找候选件号',historical_quotes:'查历史报价',find_alternatives:'查替代关系'};
-async function agentLoad(){
-  const id=current.id;agentChat.caseId=id;agentChat.turns=[];agentChat.loaded=false;agentChat.text='';agentChat.pending='';
-  try{const log=await request(`/cases/${id}/agent`);if(current?.id===id){agentChat.turns=log.turns;agentChat.loaded=true;if(focus?.type==='agent')renderWork();else placeAgentNote()}}
-  catch(e){notice(e.message,true)}
+const agentChats=new Map();
+function getAgentChat(caseId){
+  const key=caseId||'__none__';
+  let chat=agentChats.get(key);
+  if(!chat){chat={caseId:caseId||null,turns:[],busy:false,consent:false,text:'',pending:'',steps:[],loaded:false,loadReq:0};agentChats.set(key,chat)}
+  return chat;
 }
-async function agentSend(message){
-  const id=current.id;
-  agentChat.busy=true;agentChat.pending=message;agentChat.text='';agentChat.steps=[];renderWork();
-  const poll=setInterval(async()=>{try{const p=await request(`/cases/${id}/agent/progress`);if(p.steps&&agentChat.busy&&agentChat.caseId===id&&p.steps.length!==agentChat.steps.length){agentChat.steps=p.steps;if(focus?.type==='agent'&&current?.id===id)agentPending()}}catch{}},1000);
+window.getAgentChat=getAgentChat;
+Object.defineProperty(window,'agentChat',{get(){return getAgentChat(current?.id||null)},configurable:true});
+window.clearWorkCaches=()=>{
+  evidenceCache.clear();quoteSnapshots.clear();agentChats.clear();intake=null;
+  try{delete window.rfqLastExport}catch{window.rfqLastExport=null}
+};
+const SYNTHETIC_REMOTE_RE=/^(guided|demo|lifecycle|en-prose|zh-forward-revision|zh-mixed-line|prose-cn|forward-revision|inbox-\d{2}|合成体验-两张询价)\.eml$/i;
+function isLikelySyntheticCase(c,mats){
+  if(authState.user?.role==='demo')return true;
+  if(c&&SYNTHETIC_REMOTE_RE.test(c.title||''))return true;
+  const files=mats&&c&&mats.caseId===c.id?mats.files.filter(f=>!f.container_file):[];
+  return files.length>0&&files.every(f=>SYNTHETIC_REMOTE_RE.test(f.file));
+}
+const agentToolNames={get_case_state:'读取工作单',read_original:'读原文',extract_candidates:'提取候选',add_mail_to_case:'把邮件加入工作单',check_prices:'查价',explain_row:'查询价行依据',draft_clarification:'起草澄清邮件',version_history:'查版本历史',search_rules:'检索规则',lookup_stock:'查库存',search_parts:'语义找候选件号',historical_quotes:'查历史报价',find_alternatives:'查替代关系'};
+async function agentLoad(targetId=current?.id){
+  if(!targetId)return;
+  const id=targetId,chat=getAgentChat(id),req=++chat.loadReq;
   try{
-    const r=await request(`/cases/${id}/agent`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,consent:true})});
+    const log=await request(`/cases/${id}/agent`);
+    if(req!==chat.loadReq)return;
+    chat.turns=log.turns||[];chat.loaded=true;
+    if(current?.id===id){
+      if(focus?.type==='agent'){
+        const inp=$('agentInput');
+        if(inp&&inp.value&&!chat.busy)chat.text=inp.value;
+        renderWork();
+      }else{
+        placeAgentNote();renderAgentEntry();
+      }
+    }
+  }catch(e){if(current?.id===id)notice(e.message,true)}
+}
+async function agentSend(message,opts={}){
+  const id=opts.caseId||current?.id;
+  if(!id)return;
+  const chat=getAgentChat(id);
+  if(chat.busy)return;
+  let consent=Boolean(opts.consent||chat.consent);
+  if(!consent&&!isLikelySyntheticCase(current?.id===id?current:null,materials)){
+    const ok=await RfqDialog.confirm({title:'把工作单内容发送给模型服务',body:'当前工作单包含上传的原件材料，将发送给模型服务进行处理与分析。请确认这些材料允许外发。',ok:'同意并发送'});
+    if(!ok){
+      if(!chat.text)chat.text=message;
+      if(current?.id===id&&focus?.type==='agent')renderWork();
+      return;
+    }
+    consent=true;chat.consent=true;
+  }
+  chat.busy=true;chat.pending=message;chat.text='';chat.steps=[];
+  if(current?.id===id){if(focus?.type==='agent')renderWork();renderAgentEntry()}
+  let polling=false;
+  const poll=setInterval(async()=>{
+    if(polling||!chat.busy)return;
+    polling=true;
+    try{
+      const p=await request(`/cases/${id}/agent/progress`);
+      if(p.steps&&chat.busy&&p.steps.length!==chat.steps.length){
+        chat.steps=p.steps;
+        if(focus?.type==='agent'&&current?.id===id)agentPending(chat);
+      }
+    }catch{}
+    finally{polling=false}
+  },1000);
+  try{
+    const r=await request(`/cases/${id}/agent`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,consent})});
     clearInterval(poll);
-    if(agentChat.caseId===id)agentChat.turns.push(r.turn);
-    agentChat.busy=false;agentChat.pending='';
+    chat.turns.push(r.turn);
+    chat.busy=false;chat.pending='';chat.steps=[];
     if(current?.id===id)show(r.case);else activity({caseId:id,title:r.case.title},'询价 Agent 已完成回复',false);
   }catch(e){
     clearInterval(poll);
-    agentChat.busy=false;agentChat.pending='';
-    if(agentChat.caseId===id)agentChat.text=message;
-    if(current?.id===id&&focus?.type==='agent')renderWork();
-    notice(e.message,true);
+    chat.busy=false;chat.pending='';chat.steps=[];
+    if(e.status===422&&!consent&&/同意/.test(e.message||'')){
+      const ok=await RfqDialog.confirm({title:'把工作单内容发送给模型服务',body:'服务端要求明确确认后才可将本工作单内容发送给模型服务。请确认这些材料允许外发。',ok:'同意并发送'});
+      if(ok){chat.consent=true;return agentSend(message,{caseId:id,consent:true})}
+      if(!chat.text)chat.text=message;
+      if(current?.id===id){if(focus?.type==='agent')renderWork();renderAgentEntry();notice('已取消外发；未发送给模型服务。')}
+      return;
+    }
+    if(!chat.text)chat.text=message;
+    if(current?.id===id){if(focus?.type==='agent')renderWork();renderAgentEntry();notice(e.message,true)}
+    else activity({caseId:id,title:''},'询价 Agent 回复失败：'+e.message,true);
   }
 }
 // The workbench shows what the agent actually did: one timeline row per tool call, then its answer and what is left for people.
@@ -540,43 +644,44 @@ function agentTimeline(steps,live=false){
   if(!steps.length)return live?'<ol class="ag-tl"><li class="run"><span class="ag-dot"></span><b>理解你的消息</b><span>正在决定先调用哪个工具…</span><small></small></li></ol>':'';
   return `<ol class="ag-tl">${steps.map(s=>`<li><span class="ag-dot"></span><b>${esc(agentToolNames[s.tool]||s.tool)}</b><span>${esc(s.summary||'')}</span><small>${s.ms!=null?(s.ms/1000).toFixed(1)+'s':''}</small></li>`).join('')}${live?'<li class="run"><span class="ag-dot"></span><b>继续处理</b><span>根据上一步结果决定下一步…</span><small></small></li>':''}</ol>`;
 }
-function pendingText(){
-  return `<p class="ag-label">Agent 正在处理 · 已调用 ${(agentChat.steps||[]).length} 个工具</p>${agentTimeline((agentChat.steps||[]).map(n=>({tool:n})),true)}`;
+function pendingText(chat=getAgentChat(current?.id)){
+  return `<p class="ag-label">Agent 正在处理 · 已调用 ${(chat.steps||[]).length} 个工具</p>${agentTimeline((chat.steps||[]).map(n=>({tool:n})),true)}`;
 }
-function agentPending(){const box=$('agentPending');if(box)box.innerHTML=pendingText()}
+function agentPending(chat=getAgentChat(current?.id)){const box=$('agentPending');if(box)box.innerHTML=pendingText(chat)}
 function agentResultCards(last){
   const c=current,rows=c.rows.filter(r=>!r.excluded),p=c.progress||{},unpriced=rows.filter(r=>!r.price),cards=[];
   if(p.pending_candidates)cards.push(['primary','待你审阅的候选',p.pending_candidates+' 条','值和原文出处并排，核对后接纳才生效','去审阅 →','cand']);
   if(rows.length&&unpriced.length)cards.push(['warn','价格依据','缺 '+unpriced.length+' 行','没有唯一有效价格的行不能批准','去核价 →','price']);
-  if(!p.pending_candidates&&rows.length&&!unpriced.length&&!rows.every(r=>r.approved))cards.push(['primary','可以批准','当前版本','批准会锁定询价、价格与澄清状态','去批准 →','approve']);
+  if(!p.pending_candidates&&rows.length&&!unpriced.length&&!summarize(c).ready)cards.push(['primary','可以批准','当前版本','批准会锁定询价、价格与澄清状态','去批准 →','approve']);
   if(last?.draft||last?.tools?.some(t=>['draft_clarification','extract_candidates'].includes(t)))cards.push(['', '澄清邮件',last?.draft?'已起草':'本轮未生成',last?.draft?'草稿在上方，系统不会替你发送':'本轮检查没有生成澄清草稿',last?.draft?'查看草稿 →':'',last?.draft?'draft':'']);
   return `<div class="ag-cards">${cards.map(([tone,k,v,d,label,go],i)=>`<div class="ag-rc ${tone}"><div class="k">${k}</div><div class="v">${esc(v)}</div><div class="d">${d}</div>${label?`<button type="button" class="btn ${tone==='primary'?'btn-primary':''}" ${i===0?'id="agentNext"':''} data-ag-go="${go}">${label}</button>`:''}</div>`).join('')}</div>`;
 }
 views.agent=function(){
-  if(agentChat.caseId!==current.id)agentLoad();
+  const chat=getAgentChat(current.id);
+  if(!chat.loaded&&!chat.busy)agentLoad(current.id);
   const turn=(t,last)=>{
     const steps=t.steps?.length?t.steps:(t.tools||[]).map(n=>({tool:n}));
     return `<div class="ag-ask"><span>你</span><p>${esc(t.message)}</p></div>
     ${steps.length?`<div class="ag-card"><p class="ag-label">Agent 这一轮做了什么 · ${steps.length} 次工具调用${t.seconds?' · '+t.seconds+' 秒':''}</p>${agentTimeline(steps)}</div>`:''}
     <div class="ag-card agent-msg bot"><p class="ag-label">结论</p><div class="agent-text">${esc(t.reply)}</div>
       ${t.draft?`<details class="agent-draft" open><summary>可发给客户的澄清邮件（草稿，未发送）</summary><pre>${esc(t.draft)}</pre><button type="button" class="btn btn-sm" data-agent-copy>复制</button></details>`:''}
-      ${last&&!agentChat.busy?agentResultCards(t):''}
+      ${last&&!chat.busy?agentResultCards(t):''}
       ${t.models?.length?`<p class="ag-meta">回答模型：${t.models.map(esc).join('、')}${t.switches?'（有一个服务慢或出错，已自动切换）':''}</p>`:''}</div>`;
   };
-  const turns=agentChat.turns;
+  const turns=chat.turns;
   W().innerHTML=`<div class="ag">
   <div class="ag-hero"><div class="ag-ic">✦</div><div><h2>询价 Agent</h2><p>把客户邮件交给它：它自己决定读原文、提取询价行、查有效价、库存、历史报价与规则，缺信息时起草澄清。可以问“查 SYN-002 的库存、历史条件与替代关系”。接纳、核价、批准始终由你来做。</p>
     <div class="ag-caps">${AGENT_CAPS.map(x=>`<span>${x}</span>`).join('')}</div></div></div>
   ${!modelState.requests_enabled?'<p class="hint">当前为离线模式，可查看历史对话；发送功能未启用。</p>':''}
   <div class="agent-log" id="agentLog">
-    ${turns.length||agentChat.pending?'':'<div class="ag-card ag-empty"><p>试试：“处理这封询价邮件”“为什么还不能批准”“给客户写封邮件问清楚”，或直接贴来客户的回信。</p></div>'}
+    ${turns.length||chat.pending?'':'<div class="ag-card ag-empty"><p>试试：“处理这封询价邮件”“为什么还不能批准”“给客户写封邮件问清楚”，或直接贴来客户的回信。</p></div>'}
     ${turns.map((t,i)=>turn(t,i===turns.length-1)+(window.renderAgentReferences?window.renderAgentReferences(t):'')).join('')}
-    ${agentChat.pending?`<div class="ag-ask"><span>你</span><p>${esc(agentChat.pending)}</p></div><div class="ag-card" id="agentPending">${pendingText()}</div>`:''}
+    ${chat.pending?`<div class="ag-ask"><span>你</span><p>${esc(chat.pending)}</p></div><div class="ag-card" id="agentPending">${pendingText(chat)}</div>`:''}
   </div>
   <form id="agentForm" class="ag-composer">
-    <textarea id="agentInput" rows="2" maxlength="${authState.user?.role==='demo'?600:12000}" placeholder="${authState.user?.role==='demo'?'继续问 Agent，例如“为什么还不能批准？”（最多600字）':'继续问 Agent，或贴来客户的回信'}" aria-label="发给询价 Agent 的内容" ${agentChat.busy?'disabled':''}>${esc(agentChat.text)}</textarea>
+    <textarea id="agentInput" rows="2" maxlength="${authState.user?.role==='demo'?600:12000}" placeholder="${authState.user?.role==='demo'?'继续问 Agent，例如“为什么还不能批准？”（最多600字）':'继续问 Agent，或贴来客户的回信'}" aria-label="发给询价 Agent 的内容" ${chat.busy?'disabled':''}>${esc(chat.text)}</textarea>
     <div class="ag-composer-row">
-    <button type="submit" class="btn btn-primary" ${agentChat.busy||!modelState.requests_enabled?'disabled':''}>${agentChat.busy?'处理中…':'发送'}</button></div>
+    <button type="submit" class="btn btn-primary" ${chat.busy||!modelState.requests_enabled?'disabled':''}>${chat.busy?'处理中…':'发送'}</button></div>
   </form></div>`;
   W().querySelectorAll('[data-ag-go]').forEach(b=>b.onclick=()=>{const go=b.dataset.agGo,c=current;
     if(go==='cand'){const f=firstFocus();if(f)setFocus(f.type,f.id)}
@@ -584,22 +689,29 @@ views.agent=function(){
     else if(go==='approve')setFocus('approve','a');
     else if(go==='draft')W().querySelector('.agent-draft')?.scrollIntoView({block:'center',behavior:'smooth'})});
   const log=$('agentLog');log.scrollTop=log.scrollHeight;
-  $('agentInput').oninput=e=>{agentChat.text=e.target.value};
-  $('agentForm').onsubmit=e=>{e.preventDefault();const text=agentChat.text.trim();if(!text){notice('请输入内容',true);return}run(()=>agentSend(text))};
+  $('agentInput').oninput=e=>{chat.text=e.target.value};
+  $('agentForm').onsubmit=e=>{e.preventDefault();const inp=$('agentInput');const text=(inp?inp.value:chat.text).trim();chat.text=inp?inp.value:chat.text;if(!text){notice('请输入内容',true);return}run(()=>agentSend(text,{caseId:current.id}))};
   qsa('[data-agent-copy]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.previousElementSibling.textContent);notice('已复制','ok')}catch{notice('复制失败，请手动选中',true)}});
 };
-function agentOpen(c,message,consent){
+async function agentOpen(c,message,consent){
   interaction.desired=c.id;current=null;show(c);
-  agentChat.caseId=c.id;agentChat.turns=[];agentChat.loaded=true;agentChat.text='';agentChat.consent=consent;
+  const chat=getAgentChat(c.id);
+  chat.turns=[];chat.loaded=true;chat.text='';chat.consent=Boolean(consent);
   focus={type:'agent',id:''};render();closeDrawer();
-  return agentSend(message);
+  if(!consent&&(!materials||materials.caseId!==c.id)){try{await refreshMaterials(c)}catch{}}
+  return agentSend(message,{caseId:c.id,consent:Boolean(consent)});
 }
 $('landAgent').onsubmit=e=>{e.preventDefault();run(async()=>{
   const text=$('agentMail').value.trim();
   if(!text)throw Error('请先贴一封询价邮件');
-  const c=await request('/agent/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,consent:true})});
-  $('agentMail').value='';
-  await agentOpen(c,'我贴了一封询价邮件，已存为本工作单原件。请处理它。',true);
+  const ok=await RfqDialog.confirm({title:'把粘贴的邮件发送给模型服务',body:'将把你粘贴的邮件正文保存为工作单原件，并发送给模型服务提取与分析。请勿发送不能外传的真实材料。',ok:'同意并发送'});
+  if(!ok)return;
+  const done=busyButton($('agentMailSend'),'提交中…');
+  try{
+    const c=await request('/agent/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,consent:true})});
+    $('agentMail').value='';
+    await agentOpen(c,'我贴了一封询价邮件，已存为本工作单原件。请处理它。',true);
+  }finally{done()}
 })};
 document.querySelectorAll('[data-agent-sample]').forEach(b=>b.onclick=()=>run(async()=>{
   const c=await request('/semantic-demo/'+b.dataset.agentSample,{method:'POST'});
@@ -614,10 +726,30 @@ function noteGuideExport(ctx){window.rfqLastExport={caseId:ctx.caseId,revision:c
 async function startSpotlightTrial(){
   if(!modelState.requests_enabled)throw Error('模型服务未启用，引导体验需要询价 Agent。可以先导入文件手动处理。');
   const c=await request('/semantic-demo/mail-en',{method:'POST'});
-  window.rfqSpotlight?.start(c.id);await openCase(c.id);setFocus('agent');
+  const opened=await openCase(c.id);
+  if(!opened||current?.id!==c.id)return;
+  window.rfqSpotlight?.start(c.id);
+  setFocus('agent');
 }
 $('tourStart').onclick=()=>run(startSpotlightTrial);
-$('restartGuide').onclick=()=>{if(current){window.rfqSpotlight?.start(current.id);setFocus('agent')}};
+$('restartGuide').onclick=()=>{
+  if(!current)return;
+  const chat=getAgentChat(current.id);
+  if(!modelState.requests_enabled&&!chat.turns.length){
+    const s=summarize(current);
+    const hasWork=s.cands.length>0||s.needsReview||s.active.length>0;
+    if(!hasWork){
+      setFocus('materials','');
+      notice('当前为离线模式且本单尚无正式询价行：请先生成离线标签候选，或启用模型后再开启操作引导。');
+      return;
+    }
+    window.rfqSpotlight?.start(current.id,{skipAgent:true});
+    const f=firstFocus();if(f)setFocus(f.type,f.id);
+    notice('当前为离线模式，引导将跳过 Agent 步骤，直接带你核对、核价、批准与导出。');
+    return;
+  }
+  window.rfqSpotlight?.start(current.id);setFocus('agent');
+};
 // MatrixOne shows up where the visitor already is: on approval, and next to the candidates under review.
 async function announceSnapshot(caseId){try{const r=await request(`/cases/${caseId}/matrixone`);const s=r.connected&&r.snapshots?.at(-1);if(s&&current?.id===caseId)notice('当前版本已批准并保存快照，可在“版本与决策记录”查看。','ok')}catch{}}
 async function noteBranch(caseId,batchId){
@@ -628,24 +760,27 @@ async function noteBranch(caseId,batchId){
 // Wherever the person is working, the agent's last conclusion stays one line away, with a way back to it.
 function placeAgentNote(){
   const head=W().querySelector('.w-head');if(!current||!head||focus?.type==='agent'||W().querySelector('.ag-note'))return;
-  const t=agentChat.caseId===current.id&&agentChat.turns.at(-1);if(!t?.reply)return;
+  const chat=getAgentChat(current.id),t=chat.turns.at(-1);if(!t?.reply)return;
   // What it told the person to do next is the useful line here; otherwise its first complete sentence.
   const lines=t.reply.split('\n').map(x=>x.trim()).filter(Boolean);
   const next=lines.find(x=>/^下一步/.test(x));
-  const first=(next||lines.find(x=>!/[：:]$/.test(x))||t.reply).split(/(?<=[。！？!?])/)[0].replace(/^下一步[：:]\s*/,'下一步：');
+  const rawLine=next||lines.find(x=>!/[：:]$/.test(x))||t.reply;
+  const matched=rawLine.match(/^[^。！？!?]*[。！？!?]?/);
+  const first=(matched?matched[0]:rawLine).replace(/^下一步[：:]\s*/,'下一步：');
   const n=document.createElement('button');n.type='button';n.className='ag-note';
   n.innerHTML=`<span class="ag-note-ic" aria-hidden="true">✦</span><span class="ag-note-txt"><b>Agent 上一轮</b>${esc(first.length>90?first.slice(0,90)+'…':first)}</span><span class="ag-note-go">回到 Agent →</span>`;
   n.onclick=()=>setFocus('agent');head.after(n);
 }
 function renderAgentEntry(){
   const sub=$('agentEntrySub');if(!sub||!current)return;
-  const mine=agentChat.caseId===current.id,t=mine&&agentChat.turns.at(-1);
-  sub.textContent=mine&&agentChat.busy?'正在处理…':t?`上一轮调用了 ${(t.steps||t.tools||[]).length} 个工具`:'交给它读原件、提候选、查价、起草澄清';
-  $('mAgent')?.classList.toggle('on',focus?.type==='agent');
+  const chat=getAgentChat(current.id),t=chat.turns.at(-1);
+  sub.textContent=chat.busy?'正在处理…':t?`上一轮调用了 ${(t.steps||t.tools||[]).length} 个工具`:'交给它读原件、提候选、查价、起草澄清';
+  syncMobileNavActive();
 }
 const renderWorkPlain=renderWork;
 renderWork=function(){renderWorkPlain();if(!current)return;
-  if(focus?.type!=='agent'&&agentChat.caseId!==current.id)agentLoad();else placeAgentNote();
+  const chat=getAgentChat(current.id);
+  if(focus?.type!=='agent'&&!chat.loaded&&!chat.busy)agentLoad(current.id);else placeAgentNote();
   renderAgentEntry();
   if(focus?.type==='cand')noteBranch(current.id,focus.id.split(':')[0])};
 $('mAgent').onclick=()=>{if(current)setFocus('agent')};

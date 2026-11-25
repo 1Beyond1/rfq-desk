@@ -1,6 +1,6 @@
 /* Account-scoped synthetic inbox and read-only business references. */
 const inboxLabels={new_rfq:'新询价',revision:'回信或修订',other:'非询价',suspicious:'可疑'};
-let inboxItems=[],onsiteMode='cases';
+let inboxItems=[],onsiteMode='cases',inboxRequest=0;
 const referenceState={kind:'stock',query:'SYN-002',condition:'',unit:'EA',quantity:'6',semantic:true,rerank:false};
 
 function workspaceMode(mode){
@@ -10,11 +10,13 @@ function workspaceMode(mode){
   document.querySelector('#landing .land-create').hidden=mode!=='cases';
   for(const [id,m] of [['workspaceCases','cases'],['workspaceInbox','inbox'],['workspaceReferences','references']])$(id).setAttribute('aria-pressed',String(mode===m));
 }
+window.getOnsiteMode=()=>onsiteMode;
 window.resetOnsiteHome=()=>workspaceMode('cases');
+window.resetOnsiteState=()=>{inboxItems=[];inboxRequest++;workspaceMode('cases');$('onsiteHomePanel')?.replaceChildren()};
 $('workspaceCases').onclick=()=>workspaceMode('cases');
-$('workspaceInbox').onclick=()=>run(showInbox);
+$('workspaceInbox').onclick=()=>run(()=>showInbox());
 $('workspaceReferences').onclick=()=>{workspaceMode('references');renderReferences($('onsiteHomePanel'))};
-$('deskInbox').onclick=()=>{showHome();run(showInbox)};
+$('deskInbox').onclick=()=>{showCases();run(()=>showInbox())};
 
 /* ---------- model stages: make Jev routing and RAG retrieval visible ---------- */
 function pct(v){return Math.max(0,Math.min(1,Number(v)||0))}
@@ -102,12 +104,15 @@ function renderReferences(root){
 views.references=()=>{W().innerHTML='<div class="w-body" id="deskReferences"></div>';renderReferences($('deskReferences'))};
 window.renderAgentReferences=turn=>turn.references?.length?`<details class="agent-reference-evidence"><summary>本轮查询依据 · ${turn.references.length} 项</summary>${turn.references.map(item=>`<section><h3>${esc(agentToolNames[item.tool]||item.tool)}</h3>${referenceResult(item.result)}</section>`).join('')}</details>`:'';
 
-async function showInbox(){
+async function showInbox(focusMailId=''){
+  const reqId=++inboxRequest;
   workspaceMode('inbox');$('onsiteHomePanel').innerHTML='<p class="list-empty">读取收件箱…</p>';
   const [messages,cases]=await Promise.all([request('/inbox'),request('/cases')]);
-  inboxItems=messages;caseList=cases;if(onsiteMode==='inbox')renderInbox();
+  if(reqId!==inboxRequest||onsiteMode!=='inbox')return;
+  inboxItems=messages;caseList=cases;
+  renderInbox(focusMailId);
 }
-function renderInbox(){
+function renderInbox(focusMailId=''){
   const root=$('onsiteHomePanel');
   const head=`<div class="onsite-panel-title"><span class="eyebrow">账号隔离 · 询价邮件</span><h2>询价收件箱</h2><p>样例保留真实Jev预置判定，可按需重新判断。实际模型和回退来源会显示在结果中。不确定或可疑邮件先交人工；修订需明确选择原工作单。</p><button type="button" class="btn" id="seedInbox">${inboxItems.length?'刷新样例':'载入 12 封样例'}</button></div>`;
   root.innerHTML=head+`<div class="inbox-list">${inboxItems.length?inboxItems.map(m=>{
@@ -130,10 +135,19 @@ function renderInbox(){
   }).join(''):'<p class="list-empty">载入预置邮件后，可以体验分流与人工改判。</p>'}</div>`;
   $('seedInbox').onclick=()=>run(async()=>{const done=busyButton($('seedInbox'),'载入中…');try{await request('/inbox/samples',{method:'POST'});await showInbox()}finally{done()}});
   root.querySelectorAll('[data-open-linked]').forEach(b=>{const m=inboxItems.find(x=>x.id===b.dataset.openLinked);b.onclick=()=>run(()=>openCase(m.case_id))});
-  root.querySelectorAll('[data-triage-mail]:not([disabled])').forEach(b=>b.onclick=()=>run(async()=>{const m=inboxItems.find(m=>m.id===b.dataset.triageMail),done=busyButton(b,'分流中…');try{await request(`/inbox/${m.id}/triage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,force:b.dataset.force==='1'})});await showInbox()}finally{done()}}));
-  root.querySelectorAll('[data-review-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();run(async()=>{const m=inboxItems.find(m=>m.id===form.dataset.reviewMail),data=new FormData(form);await request(`/inbox/${m.id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,category:data.get('category'),reason:data.get('reason')})});await showInbox()})});
-  root.querySelectorAll('[data-open-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();run(async()=>{const m=inboxItems.find(m=>m.id===form.dataset.openMail),data=new FormData(form);const result=await request(`/inbox/${m.id}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,case_id:data.get('case_id')||''})});await openCase(result.case_id);if(current?.id===result.case_id&&modelState.requests_enabled)setFocus('agent');
+  root.querySelectorAll('[data-triage-mail]:not([disabled])').forEach(b=>b.onclick=()=>run(async()=>{const m=inboxItems.find(m=>m.id===b.dataset.triageMail),done=busyButton(b,'分流中…');try{await request(`/inbox/${m.id}/triage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,force:b.dataset.force==='1'})});await showInbox(m.id)}finally{done()}}));
+  root.querySelectorAll('[data-review-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();if(form.dataset.busy==='1')return;form.dataset.busy='1';const done=busyButton(form.querySelector('button[type=submit]'),'记录中…');run(async()=>{try{const m=inboxItems.find(m=>m.id===form.dataset.reviewMail),data=new FormData(form);await request(`/inbox/${m.id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,category:data.get('category'),reason:data.get('reason')})});await showInbox(m.id)}finally{delete form.dataset.busy;done()}})});
+  root.querySelectorAll('[data-open-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();if(form.dataset.busy==='1')return;form.dataset.busy='1';const done=busyButton(form.querySelector('button[type=submit]'),'处理中…');run(async()=>{try{const m=inboxItems.find(m=>m.id===form.dataset.openMail),data=new FormData(form);const result=await request(`/inbox/${m.id}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,case_id:data.get('case_id')||''})});await openCase(result.case_id);if(current?.id===result.case_id&&modelState.requests_enabled)setFocus('agent');
   // 进工作单时问一句，不强制把导览接上。
   try{window.rfqSpotlight?.maybeInviteCase?.(result.case_id)}catch{}
-})});
+  }finally{delete form.dataset.busy;done()}})});
+  if(focusMailId){
+    const sel=typeof CSS!=='undefined'&&CSS.escape?CSS.escape(focusMailId):focusMailId.replace(/["\\]/g,'\\$&');
+    const card=root.querySelector(`.inbox-card[data-mail="${sel}"]`);
+    if(card){
+      card.classList.add('is-highlight');
+      card.scrollIntoView?.({block:'center',behavior:'smooth'});
+      setTimeout(()=>card.classList.remove('is-highlight'),3500);
+    }
+  }
 }

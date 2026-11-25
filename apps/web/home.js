@@ -1,6 +1,12 @@
 /* Workspace home: the agent speaks first, the rest is one click away. */
-const ahState = {overview: null, turns: [], busy: false, started: false, loading: false};
+const ahState = {overview: null, turns: [], busy: false, started: false, loading: false, error: ''};
 window.ahState = ahState;   // 导览要据此判断这步是否已经做完
+window.resetAgentHomeState = () => {
+  ahState.overview = null; ahState.turns = []; ahState.busy = false; ahState.started = false; ahState.loading = false; ahState.error = '';
+  const log = $('ahLog'); if (log && log.replaceChildren) log.replaceChildren(); else if (log) log.innerHTML = '';
+  const stats = typeof document.getElementById === 'function' ? document.getElementById('ahStats') : null;
+  if (stats && stats.replaceChildren) stats.replaceChildren(); else if (stats) stats.innerHTML = '';
+};
 
 function ahEsc(v) {
   return String(v ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
@@ -59,25 +65,48 @@ function ahRenderLog() {
   }
   log.innerHTML = ahState.turns.map(ahTurn).join('');
   log.querySelectorAll('[data-ah-mail]').forEach(b => b.onclick = () => {
+    const mailId = b.dataset.ahMail || '';
     showCases();
     workspaceMode('inbox');
-    run(showInbox);
+    run(() => showInbox(mailId));
   });
 }
 
 function ahRenderStats(ov) {
-  const box = document.getElementById('ahStats');
+  const box = typeof document.getElementById === 'function' ? document.getElementById('ahStats') : null;
   if (!box) return;
   box.innerHTML = ahBrief(ov) || '';
   box.querySelectorAll('[data-go]').forEach(b => b.onclick = () => ahOpen(b.dataset.go));
 }
 
+function ahApplyOverview(ov) {
+  if (!ov) return;
+  ahState.overview = ov;
+  ahState.error = '';
+  ahRenderStats(ov);
+  const mailTotal = (ov.mails?.total || 0);
+  const caseTotal = (ov.cases || []).length;
+  const mailCount = $('ahMailCount'), caseCount = $('ahCaseCount'), dateEl = $('ahDate'), subEl = $('ahSub');
+  if (mailCount) { mailCount.textContent = mailTotal; mailCount.hidden = !mailTotal; }
+  if (caseCount) { caseCount.textContent = caseTotal; caseCount.hidden = !caseTotal; }
+  if (dateEl) dateEl.textContent = (ov.today || '').replace(/-/g, ' / ');
+  const todo = ov.todo || [];
+  if (subEl) {
+    subEl.textContent = todo.length
+      ? `${todo.map(t => t.text).join('，')}。可以问它，也可以直接点下面的数字进去。`
+      : '当前没有待办。可以让它按件号查库存、历史报价或替代件。';
+  }
+}
+
 function ahMaybeInvite() {
   try {
-    const done = sessionStorage.getItem('rfq-home-tour-done');
-    const declined = sessionStorage.getItem('rfq-home-tour-declined');
-    if (!done && !declined && !window.rfqSpotlight?.active?.() && authState.user?.role === 'demo') {
-      window.rfqSpotlight?.invite();
+    if (typeof authState !== 'undefined' && authState.user?.role === 'demo') {
+      if (window.rfqSpotlight?.maybeInviteHome) window.rfqSpotlight.maybeInviteHome();
+      else {
+        const done = sessionStorage.getItem('rfq-home-tour-done');
+        const declined = sessionStorage.getItem('rfq-home-tour-declined');
+        if (!done && !declined && !window.rfqSpotlight?.active?.()) window.rfqSpotlight?.invite();
+      }
     }
   } catch {}
 }
@@ -87,25 +116,32 @@ async function ahLoad() {
   ahState.loading = true;
   ahState.started = true;
   try {
-  const ov = await request('/agent/overview').catch(() => null);
-  ahState.overview = ov;
-  ahRenderStats(ov);
-  if (ov) {
-    const mailTotal = (ov.mails?.total || 0);
-    const caseTotal = (ov.cases || []).length;
-    $('ahMailCount').textContent = mailTotal; $('ahMailCount').hidden = !mailTotal;
-    $('ahCaseCount').textContent = caseTotal; $('ahCaseCount').hidden = !caseTotal;
-    $('ahDate').textContent = (ov.today || '').replace(/-/g, ' / ');
-    const todo = ov.todo || [];
-    $('ahSub').textContent = todo.length
-      ? `${todo.map(t => t.text).join('，')}。可以问它，也可以直接点下面的数字进去。`
-      : '当前没有待办。可以让它按件号查库存、历史报价或替代件。';
-  }
+    let ov = null, ovErr = '';
+    try {
+      ov = await request('/agent/overview');
+    } catch (e) {
+      ovErr = e?.message || '暂时无法连接';
+    }
+    if (ov) {
+      ahApplyOverview(ov);
+    } else {
+      ahState.overview = null;
+      ahState.error = ovErr;
+      ahRenderStats(null);
+      const subEl = $('ahSub');
+      if (subEl) {
+        subEl.innerHTML = `<span class="ah-err">待办读取失败：${ahEsc(ovErr)}</span> <button type="button" class="text-btn" id="ahRetryOverview">重试</button>`;
+        const retryBtn = $('ahRetryOverview');
+        if (retryBtn) retryBtn.onclick = () => run(() => ahLoad());
+      }
+    }
 
-  const history = await request('/agent/home').catch(() => ({turns: []}));
-  ahState.turns = history.turns || [];
-  ahRenderLog();
-  ahRenderBrief(ov);
+    const history = await request('/agent/home').catch(() => ({turns: []}));
+    if (!ahState.busy) {
+      ahState.turns = history.turns || [];
+      ahRenderLog();
+      if (ov) ahRenderBrief(ov);
+    }
   } finally {
     ahState.loading = false;
   }
@@ -137,8 +173,22 @@ function ahRenderBrief(ov) {
 
 async function ahOpening() {}  // 开场改成本地简报，不再调用模型
 
+const AH_SHORT_QUESTION = 120;
 async function ahAsk(text, opts = {}) {
   if (ahState.busy) return;
+  let consent = Boolean(opts.consent);
+  if (!consent && text.length > AH_SHORT_QUESTION && typeof RfqDialog !== 'undefined' && RfqDialog?.confirm) {
+    const ok = await RfqDialog.confirm({
+      title: '把长文本内容发送给模型服务',
+      body: '本次提问超过 120 字，可能包含客户邮件或业务明细。确认发送给模型服务处理？请勿发送禁止外传的材料。',
+      ok: '同意并发送',
+    });
+    if (!ok) {
+      if (!$('ahInput').value.trim()) $('ahInput').value = text;
+      return;
+    }
+    consent = true;
+  }
   if (!ahState.started) await ahLoad();
   ahState.busy = true;
   $('ahSend').disabled = true;
@@ -150,7 +200,7 @@ async function ahAsk(text, opts = {}) {
   try {
     const post = () => request('/agent/home', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message: text, consent: true}),
+      body: JSON.stringify({message: text, consent}),
     });
     let data;
     try {
@@ -166,7 +216,7 @@ async function ahAsk(text, opts = {}) {
     ahRenderLog();
     $('ahStatus').textContent = '';
     const ov = await request('/agent/overview').catch(() => null);
-    if (ov) { ahState.overview = ov; ahRenderStats(ov); }
+    if (ov) ahApplyOverview(ov);
   } catch (error) {
     pending.pending = false;
     pending.error = true;
@@ -194,10 +244,18 @@ async function ahAsk(text, opts = {}) {
 }
 
 function ahOpen(mode) {
+  if (mode === 'import') {
+    if (typeof authState !== 'undefined' && authState.user?.role === 'demo') {
+      if (typeof notice === 'function') notice('评委体验使用合成材料；导入自己的文件请登录正式账号。');
+      return;
+    }
+    showCases();
+    $('uploadLanding')?.click();
+    return;
+  }
   showCases();
-  if (mode === 'inbox') { workspaceMode('inbox'); run(showInbox); }
+  if (mode === 'inbox') { workspaceMode('inbox'); run(() => showInbox()); }
   else if (mode === 'references') { workspaceMode('references'); renderReferences($('onsiteHomePanel')); }
-  else if (mode === 'import') { $('uploadLanding')?.click(); }
 }
 
 $('ahForm').onsubmit = e => {

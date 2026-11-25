@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,">
 <title>RFQ Desk · 航材询报价工作台</title>
-<link rel="stylesheet" href="style.css?v=20261114-mobile-guide1">
+<link rel="stylesheet" href="style.css?v=20261124-fix2">
 </head>
 <body data-view="work" data-auth="pending">
 
@@ -72,6 +72,7 @@
 <!-- 工作单抽屉：列表与低频导入入口 -->
 <aside class="drawer" id="drawer" aria-label="工作单与导入" hidden>
   <div class="drawer-head"><div><span class="eyebrow">我的工作区</span><b>全部工作单</b></div><button type="button" class="icon-btn" id="drawerClose" aria-label="关闭">×</button></div>
+  <button type="button" class="btn btn-sm btn-block" id="drawerRefreshCase" hidden>刷新当前工作单</button>
   <label class="btn btn-primary btn-block file-btn"><span>导入询价原件</span><input id="upload" type="file" accept=".eml,.xlsx,.pdf,.txt,.csv"></label>
   <p class="hint">支持 EML、XLSX、文本型 PDF、TXT 和 CSV。</p>
   <input id="caseFilter" class="search" type="search" placeholder="筛选文件名或工作单尾码" aria-label="筛选工作单">
@@ -178,7 +179,7 @@
 <div id="desk" class="desk" hidden>
   <nav class="queue" id="queuePane" aria-label="工作单事项">
     <button type="button" class="ag-entry" id="agentEntry" data-focus="agent" hidden><span class="ag-entry-ic" aria-hidden="true">✦</span><span class="ag-entry-txt"><b>询价 Agent</b><small id="agentEntrySub">交给它读原件、提候选、查价、起草澄清</small></span></button>
-    <div class="onsite-desk-nav"><button type="button" class="tool" data-focus="references">库存与历史参考</button><button type="button" class="tool" id="deskInbox">询价收件箱</button></div>
+    <div class="onsite-desk-nav"><button type="button" class="tool" data-focus="references">库存与历史参考</button><button type="button" class="tool" id="deskInbox">询价收件箱</button><button type="button" class="tool mobile-refresh-btn" id="queueRefreshCase">刷新当前单</button></div>
     <div id="nextCard" class="next-card" aria-live="polite"></div>
     <div class="seg" role="tablist">
       <button type="button" data-queue="todo" aria-selected="true">待处理</button>
@@ -266,12 +267,12 @@
 <script src="config.js?v=20261026q"></script>
 <script src="ui-state.js?v=20261026q"></script>
 <script src="account-storage.js?v=20261110pre1"></script>
-<script src="dialog.js?v=20261113a"></script>
-<script src="app.js?v=20261113f"></script>
-<script src="accounts.js?v=20261111f"></script>
-<script src="work.js?v=20261113e"></script>
-<script src="spotlight.js?v=20261114-mobile-guide1"></script>
-<script src="onsite.js?v=20261113h"></script>
-<script src="home.js?v=20261113n"></script>
+<script src="dialog.js?v=20261124-fix1"></script>
+<script src="app.js?v=20261124-fix1"></script>
+<script src="accounts.js?v=20261124-fix1"></script>
+<script src="work.js?v=20261124-fix1"></script>
+<script src="spotlight.js?v=20261124-fix1"></script>
+<script src="onsite.js?v=20261124-fix1"></script>
+<script src="home.js?v=20261124-fix1"></script>
 </body>
 </html>

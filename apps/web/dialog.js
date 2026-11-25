@@ -44,6 +44,7 @@ const RfqDialog=(()=>{
 
   function open(options){
     build();
+    if(done||host.open)finish(null);
     const o=options||{};
     fields=o.fields||[];
     host.querySelector('#askTitle').textContent=o.title||'请确认';

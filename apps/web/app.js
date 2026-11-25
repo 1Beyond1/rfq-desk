@@ -76,7 +76,8 @@ function caseTodo(c){
   if(c.pending_parse_review)return '核查解析警告';
   if(c.open_clarifications)return `${c.open_clarifications} 项澄清未解决`;
   if(c.issue_rows)return `${c.issue_rows} 行待核对或核价`;
-  if(c.active&&c.approved===c.active)return '报价可输出';
+  const approvedAll=typeof c.case_approved==='boolean'?c.case_approved:Boolean(c.active&&c.approved===c.active);
+  if(c.active&&approvedAll)return '报价可输出';
   if(c.active)return '等待人工批准';
   return '核对询价原件';
 }
@@ -100,9 +101,11 @@ $('caseFilter').oninput=$('landingFilter').oninput=renderCaseLists;
 function showHome(){
   // 工作区首页：Agent 说话，列表与收件箱都在入口里。
   if(window.resetOnsiteHome)window.resetOnsiteHome();
+  window.rfqSpotlight?.dismiss?.();
   interaction.navigate(null);current=null;focus=null;srcField=null;srcFile=null;closeSource();closeDrawer();
   $('agentHome').hidden=false;$('landing').hidden=true;$('desk').hidden=true;
   $('mobileNav').hidden=true;$('srcToggle').hidden=true;$('refreshCase').hidden=true;
+  if($('drawerRefreshCase'))$('drawerRefreshCase').hidden=true;
   $('caseEyebrow').textContent='工作区';$('title').textContent='工作区';$('title').removeAttribute('title');$('version').textContent='';notice('');
   history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 航材询报价工作台';
   if(window.renderAgentHome)window.renderAgentHome();
@@ -111,22 +114,29 @@ function showHome(){
 function showCases(){
   // 工作单列表（原 landing）：从首页入口进来。
   if(window.resetOnsiteHome)window.resetOnsiteHome();
+  window.rfqSpotlight?.dismiss?.();
   interaction.navigate(null);current=null;focus=null;srcField=null;srcFile=null;closeSource();closeDrawer();
   $('agentHome').hidden=true;$('landing').hidden=false;$('desk').hidden=true;
   $('mobileNav').hidden=true;$('srcToggle').hidden=true;$('refreshCase').hidden=true;
+  if($('drawerRefreshCase'))$('drawerRefreshCase').hidden=true;
   $('caseEyebrow').textContent='我的工作区';$('title').textContent='我的工作单';$('title').removeAttribute('title');$('version').textContent='';notice('');
   history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 航材询报价工作台';
   renderCaseLists();run(refreshList);
 }
+window.showHome=showHome;
 window.showCases=showCases;
 $('homeBtn').onclick=showHome;
-$('refreshCase').onclick=()=>{if(current)run(()=>openCase(current.id))};
+const refreshCurrentCase=()=>{if(current){closeDrawer();run(()=>openCase(current.id))}};
+$('refreshCase').onclick=refreshCurrentCase;
+if($('drawerRefreshCase'))$('drawerRefreshCase').onclick=refreshCurrentCase;
+if($('queueRefreshCase'))$('queueRefreshCase').onclick=refreshCurrentCase;
 function show(c){
   const switched=current?.id!==c.id;
   current=c;
   restorePriceDraft(c);
   if(switched){focus=null;srcField=null;srcFile=null;queueMode='todo';rowFilter='all'}
   $('agentHome').hidden=true;$('landing').hidden=true;$('desk').hidden=false;$('mobileNav').hidden=false;$('srcToggle').hidden=false;$('refreshCase').hidden=false;
+  if($('drawerRefreshCase'))$('drawerRefreshCase').hidden=false;
   const desk=$('desk');desk.dataset.caseId=c.id;desk.dataset.revision=c.revision;desk.dataset.priceVersion=c.price_version;
   $('caseEyebrow').textContent='工作单 · 尾码 '+tail(c.id);$('title').textContent=c.title;$('title').title=c.title;
   $('version').innerHTML=`第 <b class="mono" id="revNo">${c.revision}</b> 版<span>价表 <b class="mono">v${c.price_version}</b></span>`;
@@ -170,11 +180,16 @@ function summarize(c){
   const content=active.filter(r=>RfqUiState.issues(r).some(x=>!RfqUiState.isPrice(x)&&x.code!=='open_clarification'));
   const structural=active.filter(r=>RfqUiState.issues(r).some(x=>!RfqUiState.isPrice(x)));
   const priced=active.filter(r=>RfqUiState.issues(r).some(RfqUiState.isPrice));
-  const ready=Boolean(active.length&&active.every(r=>r.approved)),needsReview=Boolean(c.warnings.length&&!c.review_note);
+  const needsReview=Boolean(c.warnings.length&&!c.review_note);
   const openQs=(c.clarifications||[]).filter(q=>openQuestion(q)&&active.some(r=>r.id===q.row_id)),stale=active.filter(r=>r.stale);
   const dirty=[...rowDrafts.keys()].filter(k=>k.startsWith(c.id+':')).length;
   const cands=freshCandidates(c).filter(p=>!replyCandidate(c,p));
-  return {active,issues,approved,content,structural,priced,ready,needsReview,openQs,stale,dirty,cands};
+  const pendingCands=Number(c.progress?.pending_candidates||0);
+  const serverCaseApproved=typeof c.case_approved==='boolean'?c.case_approved:(typeof c.progress?.case_approved==='boolean'?c.progress.case_approved:null);
+  const rowsApproved=Boolean(active.length&&active.every(r=>r.approved));
+  const ready=Boolean(rowsApproved&&!needsReview&&!cands.length&&!pendingCands&&(serverCaseApproved===null?true:serverCaseApproved));
+  const needsReapprove=Boolean(!ready&&rowsApproved&&serverCaseApproved===false);
+  return {active,issues,approved,content,structural,priced,ready,needsReapprove,needsReview,openQs,stale,dirty,cands,pendingCands};
 }
 function rowStatus(r){
   if(r.excluded)return['已排除','off'];if(r.approved)return['已批准','ok'];if(r.stale)return['需重新批准','warn'];
@@ -205,11 +220,26 @@ function focusValid(){
   if(type==='cand'){const [bid,cid]=id.split(':');return (current.candidate_batches||[]).some(b=>b.id===bid&&b.candidates.some(x=>x.id===cid))}
   return true;
 }
+function scrollDeskTop(){
+  if(document.body.classList.contains('coach-docked')){
+    const desk=$('desk');if(desk)desk.scrollTop=0;
+  }else{
+    scrollTo({top:0});
+  }
+}
+function syncMobileNavActive(){
+  const v=document.body.dataset.view;
+  const agentActive=focus?.type==='agent'&&v==='work';
+  document.querySelectorAll('#mobileNav [data-view]').forEach(b=>b.setAttribute('aria-current',String(!agentActive&&b.dataset.view===v)));
+  const ma=$('mAgent');
+  if(ma){ma.classList.toggle('on',agentActive);ma.setAttribute('aria-current',String(agentActive))}
+}
 function setFocus(type,id='',opts={}){
   focus={type,id};if(!opts.keepField)srcField=null;srcFile=null;
   renderGates();renderQueue();renderWork();renderSource();
-  if(narrow())setView('work');
-  if(!opts.noScroll)$('work').scrollTo({top:0});
+  if(narrow())setView('work',{noScroll:opts.noScroll});
+  else syncMobileNavActive();
+  if(!opts.noScroll){$('work').scrollTo({top:0});if(narrow())scrollDeskTop()}
 }
 function nextFocus(){const items=queueItems().filter(i=>i.tone!=='off'),i=items.findIndex(x=>x.type===focus?.type&&x.id===focus?.id);const n=items[i+1]||items.find(x=>!(x.type===focus?.type&&x.id===focus?.id));return n||null}
 
@@ -218,7 +248,7 @@ function render(){if(!current)return;renderGates();renderQueue();renderWork();re
 const gateDefs=[['content','核对'],['clarify','澄清'],['price','核价'],['approve','批准'],['output','报价单']];
 function renderGates(){
   const {groups,s}=buildQueue(current),by=Object.fromEntries(groups.map(g=>[g.key,g]));
-  const count={content:s.content.length+s.cands.length+(s.needsReview?1:0),clarify:s.openQs.length,price:s.priced.length,approve:s.ready?0:s.active.length-s.approved.length,output:0};
+  const count={content:s.content.length+s.cands.length+(s.needsReview?1:0),clarify:s.openQs.length,price:s.priced.length,approve:s.ready?0:s.active.length?Math.max(1,s.active.length-s.approved.length):0,output:0};
   const active={warnings:'content',row:'content',cand:'content',materials:'content',q:'clarify',clarifications:'clarify',prices:'price',price:'price',approve:'approve',output:'output'}[focus?.type];
   $('gates').innerHTML=gateDefs.map(([k,l])=>{const g=by[k],done=k==='output'?s.ready:k==='content'?Boolean(s.active.length&&!count.content):k==='price'?Boolean(s.active.length&&g.done):g.done;return `<li><button type="button" data-gate="${k}" aria-current="${k===active?'page':'false'}" class="gate ${done?'done':count[k]?'open':'idle'}"><span>${l}</span>${done||count[k]?`<b>${done?'✓':count[k]}</b>`:''}</button></li>`}).join('');
   document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>{
@@ -254,29 +284,43 @@ function renderQueue(){
   const batchTools=(expiredIds.length?`<button type="button" class="btn btn-sm" id="batchDue">统一修改已过期行的截止日期</button>`:'')+(duplicateIds.length?`<button type="button" class="btn btn-sm" id="batchDuplicates">每组完全重复只保留首行</button>`:'');
   $('queue').innerHTML=(batchTools?`<div class="row-tools">${batchTools}</div>`:'')+groups.filter(g=>g.items.length).map(g=>`<section class="q-group${g.done?' done':''}" data-group="${g.key}"><h3><span>${g.title}</span><small>${g.items.length}</small></h3>${g.items.map(i=>`<button type="button" class="q-item tone-${i.tone}${isFocus(i)?' current':''}" data-qtype="${i.type}" data-qid="${esc(i.id)}"><b class="${i.mono?'mono':''}">${esc(i.title)}</b><small>${esc(i.sub)}</small></button>`).join('')}</section>`).join('');
   if(expiredIds.length)$('batchDue').onclick=()=>run(async()=>{
-    const ids=expiredIds;
+    const btn=$('batchDue'),ids=expiredIds,ctx=interaction.capture(current);
     const answer=await RfqDialog.ask({title:'统一修改截止日期',body:`将对 ${ids.length} 行已过期行写入同一新截止日期，并记录本次裁定理由。`,ok:'保存裁定',fields:[
       {name:'due',label:'新截止日期（YYYY-MM-DD）',placeholder:'2026-12-31',maxlength:10,required:true,pattern:'^\\d{4}-\\d{2}-\\d{2}$',patternError:'请按 YYYY-MM-DD 填写'},
       {name:'reason',label:'统一裁定理由',type:'textarea',maxlength:500,required:true,missing:'请填写统一裁定理由'}
     ]});
     if(!answer)return;
-    await request(`/cases/${current.id}/rows`,{
-      method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({revision:current.revision,values:{row_ids:ids,due:answer.due,reason:answer.reason}})
-    });
-    await openCase(current.id);
+    if(!interaction.active(ctx,current)){activity(ctx,'页面已切换，未发送旧操作',true);return}
+    const task=interaction.begin(ctx,'batch-due'),done=typeof busyButton==='function'?busyButton(btn,'保存中…'):()=>{};
+    try{
+      const c=await request(`/cases/${ctx.caseId}/rows`,{
+        method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({revision:ctx.revision,values:{row_ids:ids,due:answer.due,reason:answer.reason}})
+      });
+      applyResponse(c,ctx,`已统一更新 ${ids.length} 行的截止日期。`);
+    }catch(e){
+      if(interaction.active(ctx,current))throw e;
+      activity(ctx,'批量修改截止日期失败：'+e.message,true);
+    }finally{interaction.finish(task);done()}
   });
   if(duplicateIds.length)$('batchDuplicates').onclick=()=>run(async()=>{
-    const ids=duplicateIds;
+    const btn=$('batchDuplicates'),ids=duplicateIds,ctx=interaction.capture(current);
     const answer=await RfqDialog.ask({title:'排除完全重复行',body:`将排除 ${ids.length} 行与首行完全重复的记录，原件与首次出现行不变。`,ok:'排除重复行',fields:[
       {name:'reason',label:'统一裁定理由',type:'textarea',maxlength:500,required:true}
     ]});
     if(!answer)return;
-    await request(`/cases/${current.id}/rows`,{
-      method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({revision:current.revision,values:{row_ids:ids,excluded:true,reason:answer.reason}})
-    });
-    await openCase(current.id);
+    if(!interaction.active(ctx,current)){activity(ctx,'页面已切换，未发送旧操作',true);return}
+    const task=interaction.begin(ctx,'batch-duplicates'),done=typeof busyButton==='function'?busyButton(btn,'排除中…'):()=>{};
+    try{
+      const c=await request(`/cases/${ctx.caseId}/rows`,{
+        method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({revision:ctx.revision,values:{row_ids:ids,excluded:true,reason:answer.reason}})
+      });
+      applyResponse(c,ctx,`已排除 ${ids.length} 行完全重复记录。`);
+    }catch(e){
+      if(interaction.active(ctx,current))throw e;
+      activity(ctx,'批量排除重复行失败：'+e.message,true);
+    }finally{interaction.finish(task);done()}
   });
   document.querySelectorAll('[data-qtype]').forEach(b=>b.onclick=()=>setFocus(b.dataset.qtype,b.dataset.qid));
 }
@@ -328,6 +372,35 @@ function focusSources(){
   }
   return out;
 }
+function highlightSourceText(raw,quotes){
+  const str=String(raw??'');
+  if(!quotes||!quotes.size&&!quotes.length)return esc(str);
+  const terms=[...new Set([...quotes].map(q=>String(q??'')).filter(Boolean))].sort((a,b)=>b.length-a.length);
+  if(!terms.length)return esc(str);
+  const ranges=[];
+  const overlaps=(s,e)=>ranges.some(([rs,re])=>s<re&&e>rs);
+  for(const term of terms){
+    let pos=0;
+    while(pos<=str.length-term.length){
+      const idx=str.indexOf(term,pos);
+      if(idx<0)break;
+      const end=idx+term.length;
+      if(!overlaps(idx,end)){ranges.push([idx,end]);break}
+      pos=idx+1;
+    }
+  }
+  if(!ranges.length)return esc(str);
+  ranges.sort((a,b)=>a[0]-b[0]);
+  let out='',cursor=0;
+  for(const [s,e] of ranges){
+    if(s>cursor)out+=esc(str.slice(cursor,s));
+    out+=`<mark>${esc(str.slice(s,e))}</mark>`;
+    cursor=e;
+  }
+  if(cursor<str.length)out+=esc(str.slice(cursor));
+  return out;
+}
+window.rfqHighlightSourceText=highlightSourceText;
 function renderSource(){
   if(!current)return;const marks=focusSources(),files=materials.caseId===current.id?materials.files:[];
   if(materials.caseId!==current.id){$('srcBody').innerHTML='<p class="hint pad">读取原件…</p>';$('srcFiles').innerHTML='';return}
@@ -344,7 +417,7 @@ function renderSource(){
     const hit=matchUnit(file,m);if(!hit)continue;if(hit.how==='number')approx=true;
     const h=hits.get(hit.i)||{strong:false,labels:new Set(),quotes:new Set(),how:hit.how};h.strong||=m.strong;h.labels.add(m.label);if(m.quote)h.quotes.add(m.quote);hits.set(hit.i,h);
   }
-  const lineHtml=(u,i)=>{const h=hits.get(i);let text=esc(u.text);if(h)for(const q of h.quotes){const e=esc(q);if(e)text=text.replace(e,`<mark>${e}</mark>`)}return `<div class="src-line${h?' hit':''}${h?.strong?' strong':''}${whole?' whole':''}" data-line="${i}"><span class="loc mono" title="${esc(u.location)}">${esc(srcGutter(u.location))}</span><span class="txt">${text||'<i class="hint">（空行）</i>'}</span>${h?`<span class="tag">${esc([...h.labels].join(' · '))}${h.how==='number'?' · 按行号对应':''}</span>`:''}</div>`};
+  const lineHtml=(u,i)=>{const h=hits.get(i);const text=h?highlightSourceText(u.text,h.quotes):esc(u.text);return `<div class="src-line${h?' hit':''}${h?.strong?' strong':''}${whole?' whole':''}" data-line="${i}"><span class="loc mono" title="${esc(u.location)}">${esc(srcGutter(u.location))}</span><span class="txt">${text||'<i class="hint">（空行）</i>'}</span>${h?`<span class="tag">${esc([...h.labels].join(' · '))}${h.how==='number'?' · 按行号对应':''}</span>`:''}</div>`};
   $('srcBody').innerHTML=`<p class="src-meta"><span class="mono">SHA-256 ${esc(file.sha256.slice(0,16))}…</span>${approx?' · 部分高亮按行号对应，请核对原文':''}${whole?' · 本文件是此问题的答复原件':''}</p>`+file.units.slice(0,800).map(lineHtml).join('')+(file.units.length>800?'<p class="hint pad">仅显示前 800 段。</p>':'');
   const target=$('srcBody').querySelector('.src-line.strong')||$('srcBody').querySelector('.src-line.hit');
   if(target)target.scrollIntoView({block:'center'});
@@ -352,16 +425,33 @@ function renderSource(){
 function showSourceField(f){srcField=f;srcFile=null;renderSource();document.querySelectorAll('[data-srcfield]').forEach(b=>b.classList.toggle('on',b.dataset.srcfield===f));if(narrow())setView('source');else if(innerWidth<=1280)openSource()}
 
 /* ---------- layout chrome ---------- */
-function openDrawer(){$('drawer').hidden=false;$('scrim').hidden=false;$('caseBtn').setAttribute('aria-expanded','true');$('caseFilter').focus()}
+function openDrawer(){toggleActivity(false);if($('accountMenu'))$('accountMenu').open=false;$('drawer').hidden=false;$('scrim').hidden=false;$('caseBtn').setAttribute('aria-expanded','true');$('caseFilter').focus()}
 function closeDrawer(){$('drawer').hidden=true;$('scrim').hidden=true;$('caseBtn').setAttribute('aria-expanded','false')}
 $('caseBtn').onclick=openDrawer;$('drawerClose').onclick=closeDrawer;$('scrim').onclick=()=>{closeDrawer();closeSource()};
-function setView(v){document.body.dataset.view=v;document.querySelectorAll('#mobileNav [data-view]').forEach(b=>b.setAttribute('aria-current',String(b.dataset.view===v)));if(v==='source')renderSource();scrollTo({top:0})}
-document.querySelectorAll('#mobileNav [data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
+function setView(v,opts={}){
+  document.body.dataset.view=v;
+  syncMobileNavActive();
+  if(v==='source')renderSource();
+  if(!opts.noScroll)scrollDeskTop();
+}
+document.querySelectorAll('#mobileNav [data-view]').forEach(b=>b.onclick=()=>{
+  if(b.dataset.view==='work'&&focus?.type==='agent'&&current){
+    const f=firstFocus();if(f){setFocus(f.type,f.id);return}
+  }
+  setView(b.dataset.view);
+});
 function openSource(){document.body.classList.add('src-open')}
 function closeSource(){document.body.classList.remove('src-open')}
 $('srcToggle').onclick=()=>document.body.classList.contains('src-open')?closeSource():openSource();
 $('srcClose').onclick=()=>{if(narrow())setView('work');else closeSource()};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('drawer').hidden)closeDrawer();closeSource()}});
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape')return;
+  if(document.querySelector('dialog[open]')){e._rfqOverlayEscape=true;return}
+  if(!$('drawer').hidden){closeDrawer();e._rfqOverlayEscape=true;return}
+  if(!$('activityPanel').hidden){toggleActivity(false);e._rfqOverlayEscape=true;return}
+  if($('accountMenu')?.open){$('accountMenu').open=false;e._rfqOverlayEscape=true;return}
+  if(document.body.classList.contains('src-open')){closeSource();e._rfqOverlayEscape=true}
+});
 $('work').addEventListener('input',rememberInput);$('work').addEventListener('change',rememberInput);
 
 /* ---------- row drafts (browser-local recovery) ---------- */
@@ -440,8 +530,23 @@ async function refreshModelState(){
   $('agentMailSend').disabled=!enabled;
   $('mailServiceHint').textContent=enabled?'提取结果由你确认后，再进入正式询价。':'当前为离线模式，请先使用“导入询价文件”。';
   document.querySelectorAll('[data-agent-sample]').forEach(b=>b.disabled=!enabled);
-  if(authState.user?.role==='demo')document.querySelectorAll('input[type=file]').forEach(el=>{el.disabled=true;el.closest('label')?.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')});
+  if(authState.user?.role==='demo'){
+    document.querySelectorAll('input[type=file]').forEach(el=>{
+      el.disabled=true;
+      const lbl=el.closest('label');
+      if(lbl){lbl.classList.add('is-disabled');lbl.setAttribute('aria-disabled','true');lbl.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')}
+    });
+    const ahImp=document.querySelector('[data-ah-go="import"]');
+    if(ahImp){ahImp.classList.add('is-demo-disabled');ahImp.setAttribute('aria-disabled','true');ahImp.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')}
+  }
 }
+document.addEventListener('click',e=>{
+  const lbl=e.target.closest?.('.file-btn.is-disabled');
+  if(lbl&&authState.user?.role==='demo'){
+    e.preventDefault();
+    notice('评委体验使用合成材料；导入自己的文件请登录正式账号。');
+  }
+});
 async function boot(){
   if(!await initializeAccount())return;
   try{await refreshModelState()}
