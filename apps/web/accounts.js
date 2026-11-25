@@ -17,6 +17,7 @@ function clearAccountMemory(clearLocal=false){
   }
   current=null;caseList=[];materials={caseId:null,revision:-1,files:[],error:''};interaction.navigate(null);
   if(typeof window.clearWorkCaches==='function')window.clearWorkCaches();
+  if(typeof window.resetCaseFilter==='function')window.resetCaseFilter();
   if(typeof window.resetAgentHomeState==='function')window.resetAgentHomeState();
   if(typeof window.resetOnsiteState==='function')window.resetOnsiteState();
   if(typeof window.rfqSpotlight?.reset==='function')window.rfqSpotlight.reset(true);
@@ -68,7 +69,7 @@ setInterval(async()=>{
 },60000);
 function formBusy(form,busy){form.querySelectorAll('button,input').forEach(el=>el.disabled=busy)}
 $('loginForm').onsubmit=async e=>{
-  e.preventDefault();const form=e.currentTarget;formBusy(form,true);$('judgeExperience').disabled=true;$('authError').textContent='正在登录…';
+  e.preventDefault();const form=e.currentTarget;formBusy(form,true);$('judgeExperience').disabled=true;$('authError').className='msg';$('authError').textContent='正在登录…';
   try{
     const state=await request('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('loginUsername').value.trim(),password:$('loginPassword').value})});
     $('loginPassword').value='';Object.assign(authState,state);
@@ -78,7 +79,7 @@ $('loginForm').onsubmit=async e=>{
   finally{formBusy(form,false);$('judgeExperience').disabled=false}
 };
 $('judgeExperience').onclick=async()=>{
-  const b=$('judgeExperience');b.disabled=true;formBusy($('loginForm'),true);$('authError').textContent='正在准备独立体验空间…';
+  const b=$('judgeExperience');b.disabled=true;formBusy($('loginForm'),true);$('authError').className='msg';$('authError').textContent='正在准备独立体验空间…';
   try{
     const state=await request('/auth/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     Object.assign(authState,state);
@@ -90,7 +91,8 @@ $('judgeExperience').onclick=async()=>{
 };
 $('passwordForm').onsubmit=async e=>{
   e.preventDefault();
-  if($('newPassword').value!==$('confirmPassword').value){$('authError').textContent='两次新密码不一致';return}
+  $('authError').className='msg';$('authError').textContent='';
+  if($('newPassword').value!==$('confirmPassword').value){$('authError').textContent='两次新密码不一致';$('authError').className='msg error';return}
   const form=e.currentTarget;formBusy(form,true);
   try{await request('/auth/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:$('oldPassword').value,new_password:$('newPassword').value})});form.reset();reloadAccount(true)}
   catch(error){$('authError').textContent=error.message;$('authError').className='msg error'}
@@ -119,23 +121,23 @@ async function loadAccounts(){
   const users=await request('/admin/users');
   $('accountList').innerHTML=`<div class="table-wrap"><table class="grid"><thead><tr><th>账号 / 姓名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody>${users.map(u=>`<tr><td><b>${esc(u.username)}</b><div class="hint">${esc(u.name)}</div></td><td>${u.role==='admin'?'管理员':'普通用户'}</td><td>${u.active?(u.must_change?'待首次修改密码':'正常'):'已停用'}</td><td>${u.role==='user'?`<button type="button" class="btn btn-sm" data-account="${esc(u.id)}" data-active="${u.active?'0':'1'}">${u.active?'停用':'启用'}</button>`:'—'}</td></tr>`).join('')}</tbody></table></div>`;
   $('accountList').querySelectorAll('[data-account]').forEach(button=>button.onclick=async()=>{
-    button.disabled=true;
-    try{await request('/admin/users/'+button.dataset.account,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:button.dataset.active==='1'})});$('accountsError').textContent='账号状态已更新';await loadAccounts()}
-    catch(e){$('accountsError').textContent=e.message;button.disabled=false}
+    button.disabled=true;$('accountsError').className='msg';$('accountsError').textContent='';
+    try{await request('/admin/users/'+button.dataset.account,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:button.dataset.active==='1'})});$('accountsError').className='msg';$('accountsError').textContent='账号状态已更新';await loadAccounts()}
+    catch(e){$('accountsError').className='msg error';$('accountsError').textContent=e.message;button.disabled=false}
   });
   const audit=await request('/admin/audit');
-  const names={account_create:'开通账号',account_disable:'停用账号',account_enable:'启用账号',login:'登录',password_change:'修改密码',password_reset:'本机重置密码'};
+  const names={account_create:'开通账号',account_disable:'停用账号',account_enable:'启用账号',login:'登录',password_change:'修改密码',password_reset:'本机重置密码',demo_start:'体验空间进入',legacy_assign:'分配历史工单'};
   $('accountAudit').innerHTML=audit.map(e=>`<p>${esc(new Date(e.at*1000).toLocaleString())} ${esc(e.actor)} ${esc(names[e.action]||e.action)} ${esc(e.subject)}</p>`).join('');
 }
 $('manageAccounts').onclick=async()=>{
-  $('accountMenu').open=false;$('accountsError').textContent='';$('accountList').replaceChildren();$('accountAudit').replaceChildren();$('accountsDialog').showModal();
-  try{await loadAccounts()}catch(e){$('accountsError').textContent=e.message}
+  $('accountMenu').open=false;$('accountsError').className='msg';$('accountsError').textContent='';$('accountList').replaceChildren();$('accountAudit').replaceChildren();$('accountsDialog').showModal();
+  try{await loadAccounts()}catch(e){$('accountsError').className='msg error';$('accountsError').textContent=e.message}
 };
 $('closeAccounts').onclick=()=>{$('createAccountForm').reset();$('accountsDialog').close()};
 $('accountsDialog').addEventListener('close',()=>$('createAccountForm').reset());
 $('createAccountForm').onsubmit=async e=>{
-  e.preventDefault();const form=e.currentTarget;formBusy(form,true);
-  try{await request('/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('createUsername').value.trim(),name:$('createName').value.trim(),password:$('createPassword').value})});form.reset();$('accountsError').textContent='账号已开通，请私下交付初始密码；本人首次登录时须修改。';await loadAccounts()}
-  catch(error){$('accountsError').textContent=error.message}
+  e.preventDefault();const form=e.currentTarget;formBusy(form,true);$('accountsError').className='msg';$('accountsError').textContent='';
+  try{await request('/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('createUsername').value.trim(),name:$('createName').value.trim(),password:$('createPassword').value})});form.reset();$('accountsError').className='msg';$('accountsError').textContent='账号已开通，请私下交付初始密码；本人首次登录时须修改。';await loadAccounts()}
+  catch(error){$('accountsError').className='msg error';$('accountsError').textContent=error.message}
   finally{formBusy(form,false)}
 };

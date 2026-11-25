@@ -83,6 +83,8 @@ const RfqDialog=(()=>{
   return {
     /* 确认框：返回 true / false */
     confirm:options=>open({...options,fields:[]}).then(value=>Boolean(value)),
+    /* 提示/说明框（单按钮） */
+    alert:options=>open({ok:'知道了',cancel:false,...options,fields:[]}).then(()=>true),
     /* 表单框：返回 {字段名: 值}，取消返回 null */
     ask:options=>open(options)
   };

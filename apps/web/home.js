@@ -18,8 +18,8 @@ const ahCatClass = {new_rfq: 'c-new', revision: 'c-rev', other: 'c-other', suspi
 
 function ahStat(value, label, hint, go, hot) {
   const tag = go ? "button" : "div";
-  return `<${tag} class="ah-stat${hot ? " hot" : ""}"${go ? ` type="button" data-go="${go}"` : ""}>
-    <b>${value}</b><span>${label}</span>${hint ? `<small>${hint}</small>` : ""}</${tag}>`;
+  return `<${tag} class="ah-stat${hot ? " hot" : ""}"${go ? ` type="button" data-go="${ahEsc(go)}"` : ""}>
+    <b>${ahEsc(value)}</b><span>${ahEsc(label)}</span>${hint ? `<small>${ahEsc(hint)}</small>` : ""}</${tag}>`;
 }
 
 function ahBrief(ov) {
@@ -28,14 +28,19 @@ function ahBrief(ov) {
   const unrouted = m.unrouted || 0, needReview = m.need_review || 0;
   const judged = Object.values(cats).reduce((a, b) => a + b, 0);
   const cases = ov.cases || [];
+  const caseTotal = ov.case_total ?? cases.length;
+  const archivedTotal = ov.archived_total || 0;
   const todo = ov.todo || [];
   const pendingCandidates = todo.find(t => t.kind === "candidates")?.count || 0;
   const parts = Object.entries(cats).map(([k, v]) => `${ahLabels[k] || k} ${v}`).join(" · ");
+  const caseHint = caseTotal
+    ? (archivedTotal ? `另含 ${archivedTotal} 张已归档` : "继续处理待批与待核价")
+    : (archivedTotal ? `${archivedTotal} 张已归档，可切换查看` : "还没有工作单");
   const cards = [
     ahStat(unrouted, "封待分流", unrouted ? "点开收件箱逐封分流" : "都已分流", unrouted ? "inbox" : "", unrouted > 0),
     ahStat(needReview, "封需人工确认", needReview ? "Jev 不确定，交给你定" : "没有待确认", needReview ? "inbox" : ""),
     ahStat(judged, "封已由 Jev 初筛", parts || "尚未调用模型", "", false),
-    ahStat(cases.length, "张工作单", cases.length ? "继续处理待批与待核价" : "还没有工作单", cases.length ? "cases" : ""),
+    ahStat(caseTotal, "张工作单", caseHint, (caseTotal || archivedTotal) ? "cases" : ""),
   ].join("");
   return cards;
 }
@@ -49,8 +54,11 @@ function ahMailCards(turn) {
 
 function ahTurn(turn) {
   const steps = (turn.steps || []).map(s => `<li><i>▸</i><span>${ahEsc(s.summary || s.tool)}</span></li>`).join('');
+  const isLocal = Boolean(turn.local || turn.mode === 'offline-local');
+  const stepMeta = (turn.steps || []).length ? `本轮调用 ${(turn.steps || []).length} 次工具` : '';
+  const botClasses = `ah-msg bot${isLocal ? ' is-local' : ''}${turn.error ? ' is-error' : ''}`;
   return `<div class="ah-msg me">${ahEsc(turn.message)}</div>
-    <div class="ah-msg bot"><div class="ah-who"><span class="ah-avatar">R</span><b>询价 Agent</b><small>${(turn.steps || []).length ? '本轮调用 ' + (turn.steps || []).length + ' 次工具' : ''}</small></div><p class="ah-text">${ahEsc(turn.reply || '')}</p>
+    <div class="${botClasses}"><div class="ah-who"><span class="ah-avatar">R</span><b>询价 Agent</b>${isLocal ? '<span class="ah-local-badge">本地规则汇总 · 未调用模型</span>' : ''}<small>${stepMeta}</small></div><p class="ah-text">${ahEsc(turn.reply || '')}</p>
       ${steps ? `<ul class="ah-steps">${steps}</ul>` : ''}
       ${ahMailCards(turn)}
       ${window.renderAgentReferences?.(turn) || ''}
@@ -85,7 +93,7 @@ function ahApplyOverview(ov) {
   ahState.error = '';
   ahRenderStats(ov);
   const mailTotal = (ov.mails?.total || 0);
-  const caseTotal = (ov.cases || []).length;
+  const caseTotal = ov.case_total ?? (ov.cases || []).length;
   const mailCount = $('ahMailCount'), caseCount = $('ahCaseCount'), dateEl = $('ahDate'), subEl = $('ahSub');
   if (mailCount) { mailCount.textContent = mailTotal; mailCount.hidden = !mailTotal; }
   if (caseCount) { caseCount.textContent = caseTotal; caseCount.hidden = !caseTotal; }
@@ -177,7 +185,8 @@ const AH_SHORT_QUESTION = 120;
 async function ahAsk(text, opts = {}) {
   if (ahState.busy) return;
   let consent = Boolean(opts.consent);
-  if (!consent && text.length > AH_SHORT_QUESTION && typeof RfqDialog !== 'undefined' && RfqDialog?.confirm) {
+  const remoteActive = typeof modelState === 'undefined' || modelState?.requests_enabled !== false;
+  if (!consent && remoteActive && text.length > AH_SHORT_QUESTION && typeof RfqDialog !== 'undefined' && RfqDialog?.confirm) {
     const ok = await RfqDialog.confirm({
       title: '把长文本内容发送给模型服务',
       body: '本次提问超过 120 字，可能包含客户邮件或业务明细。确认发送给模型服务处理？请勿发送禁止外传的材料。',
@@ -232,7 +241,7 @@ async function ahAsk(text, opts = {}) {
       const m = ov?.mails || {}, cats = m.by_category || {};
       const parts = Object.entries(cats).map(([k, v]) => `${ahLabels[k] || k} ${v}`).join('、');
       const text = ov
-        ? `今天有 ${(ov.mails?.total || 0)} 封邮件${parts ? '（Jev 初筛：' + parts + '）' : ''}、${(ov.cases || []).length} 张工作单。${(ov.todo || []).map(t => t.text).join('；') || '暂时没有待办。'}。模型这会儿没响应，这份是系统直接汇总的；可以直接点上方入口，或再问我一次。`
+        ? `今天有 ${(ov.mails?.total || 0)} 封邮件${parts ? '（Jev 初筛：' + parts + '）' : ''}、${ov.case_total ?? (ov.cases || []).length} 张工作单。${(ov.todo || []).map(t => t.text).join('；') || '暂时没有待办。'}。模型这会儿没响应，这份是系统直接汇总的；可以直接点上方入口，或再问我一次。`
         : '暂时读不到待办，可以直接点上方入口查看收件箱与工作单。';
       ahState.turns.push({message: '先看看现在有什么需要我处理的。', reply: text, steps: [], local: true});
       ahRenderLog();

@@ -1,18 +1,24 @@
 /* Account-scoped synthetic inbox and read-only business references. */
 const inboxLabels={new_rfq:'新询价',revision:'回信或修订',other:'非询价',suspicious:'可疑'};
-let inboxItems=[],onsiteMode='cases',inboxRequest=0;
-const referenceState={kind:'stock',query:'SYN-002',condition:'',unit:'EA',quantity:'6',semantic:true,rerank:false};
+const inboxFilterDefs=[['all','全部'],['unrouted','待分流'],['need_review','需人工确认'],['new_rfq','新询价'],['revision','回信或修订'],['linked','已关联']];
+let inboxItems=[],onsiteMode='cases',inboxRequest=0,inboxFilter='all',inboxQuery='';
+const referenceState={kind:'stock',query:'SYN-002',condition:'',unit:'EA',quantity:'6',semantic:true,rerank:false,consent:false};
+const refUsesModel=kind=>kind==='parts'||kind==='rule';
 
 function workspaceMode(mode){
   onsiteMode=mode;
   $('onsiteHomePanel').hidden=mode==='cases';
   document.querySelector('#landing .land-cases').hidden=mode!=='cases';
   document.querySelector('#landing .land-create').hidden=mode!=='cases';
-  for(const [id,m] of [['workspaceCases','cases'],['workspaceInbox','inbox'],['workspaceReferences','references']])$(id).setAttribute('aria-pressed',String(mode===m));
+  for(const [id,m] of [['workspaceCases','cases'],['workspaceInbox','inbox'],['workspaceReferences','references']])$(id)?.setAttribute('aria-pressed',String(mode===m));
+  const titleEl=$('title');
+  if(titleEl&&!$('landing')?.hidden){
+    titleEl.textContent=mode==='inbox'?'询价收件箱':mode==='references'?'库存与历史参考':'我的工作单';
+  }
 }
 window.getOnsiteMode=()=>onsiteMode;
 window.resetOnsiteHome=()=>workspaceMode('cases');
-window.resetOnsiteState=()=>{inboxItems=[];inboxRequest++;workspaceMode('cases');$('onsiteHomePanel')?.replaceChildren()};
+window.resetOnsiteState=()=>{inboxItems=[];inboxRequest++;inboxFilter='all';inboxQuery='';workspaceMode('cases');$('onsiteHomePanel')?.replaceChildren()};
 $('workspaceCases').onclick=()=>workspaceMode('cases');
 $('workspaceInbox').onclick=()=>run(()=>showInbox());
 $('workspaceReferences').onclick=()=>{workspaceMode('references');renderReferences($('onsiteHomePanel'))};
@@ -85,6 +91,7 @@ function referenceResult(result){
 }
 
 function renderReferences(root){
+  const showModelOpts=refUsesModel(referenceState.kind);
   root.innerHTML=`<div class="onsite-panel-title"><span class="eyebrow">只读参考 · 不修改正式询价或价表</span><h2>库存与历史参考</h2><p>件号明确时精确查询；只有描述时找候选件号。替代关系与历史价格须人工核对。</p></div>
     <form id="referenceForm" class="reference-form">
       <label>查询内容<select name="kind">${Object.entries({stock:'库存精确查询',parts:'描述或模糊件号',quote:'历史报价',alternative:'替代关系',rule:'业务规则'}).map(([k,v])=>`<option value="${k}" ${referenceState.kind===k?'selected':''}>${v}</option>`).join('')}</select></label>
@@ -92,30 +99,69 @@ function renderReferences(root){
       <label>件状<input name="condition" maxlength="30" value="${esc(referenceState.condition)}" placeholder="留空看全部"></label>
       <label>单位<input name="unit" maxlength="30" value="${esc(referenceState.unit)}"></label>
       <label>需求数量<input name="quantity" maxlength="30" value="${esc(referenceState.quantity)}"></label>
-      <div class="reference-options"><label><input name="semantic" type="checkbox" ${referenceState.semantic?'checked':''}>描述与规则使用语义检索</label><label><input name="rerank" type="checkbox" ${referenceState.rerank?'checked':''}>精排召回结果</label><label><input name="consent" type="checkbox">同意将本次检索词发送给模型（语义检索时需要）</label></div>
+      <div class="reference-options" id="referenceOptions"${showModelOpts?'':' hidden'}><label><input name="semantic" type="checkbox" ${referenceState.semantic?'checked':''}>描述与规则使用语义检索</label><label><input name="rerank" type="checkbox" ${referenceState.rerank?'checked':''}>精排召回结果</label><label><input name="consent" type="checkbox" ${referenceState.consent?'checked':''}>同意将本次检索词发送给模型（语义检索时需要）</label></div>
       <button type="submit" class="btn btn-primary">查询参考资料</button>
-    </form><p class="hint">精确查询不调用模型。语义检索与精排使用模型；不可用时显示实际回退方式。</p><div id="referenceOutput" aria-live="polite"></div>`;
-  root.querySelector('#referenceForm').onsubmit=e=>{e.preventDefault();const form=e.currentTarget,data=new FormData(form),output=root.querySelector('#referenceOutput');
-    const body={kind:data.get('kind'),query:data.get('query').trim(),condition:data.get('condition').trim(),unit:data.get('unit').trim(),quantity:data.get('quantity').trim(),semantic:data.has('semantic'),rerank:data.has('rerank'),consent:data.has('consent')};
-    Object.assign(referenceState,body);output.innerHTML='<p class="list-empty">正在查询参考资料…</p>';const done=busyButton(form.querySelector('button[type=submit]'),'查询中…');
+    </form><p class="hint" id="referenceHint">${showModelOpts?'描述与业务规则可使用语义检索与精排；模型不可用时显示实际回退方式。':'精确查询仅在本地检索，不调用模型，无需外发同意。'}</p><div id="referenceOutput" aria-live="polite"></div>`;
+  const form=root.querySelector('#referenceForm');
+  const kindSelect=form.querySelector('select[name="kind"]');
+  const optsBox=form.querySelector('#referenceOptions');
+  const hintEl=root.querySelector('#referenceHint');
+  const syncModelOpts=()=>{
+    const uses=refUsesModel(kindSelect.value);
+    referenceState.kind=kindSelect.value;
+    if(optsBox)optsBox.hidden=!uses;
+    if(hintEl)hintEl.textContent=uses?'描述与业务规则可使用语义检索与精排；模型不可用时显示实际回退方式。':'精确查询仅在本地检索，不调用模型，无需外发同意。';
+  };
+  kindSelect.onchange=syncModelOpts;
+  const consentBox=form.querySelector('input[name="consent"]');
+  if(consentBox)consentBox.onchange=()=>{referenceState.consent=consentBox.checked};
+  form.onsubmit=e=>{e.preventDefault();const data=new FormData(form),output=root.querySelector('#referenceOutput');
+    const kind=data.get('kind'),uses=refUsesModel(kind);
+    const body={kind,query:data.get('query').trim(),condition:data.get('condition').trim(),unit:data.get('unit').trim(),quantity:data.get('quantity').trim(),semantic:uses?data.has('semantic'):false,rerank:uses?data.has('rerank'):false,consent:uses?data.has('consent'):false};
+    Object.assign(referenceState,{kind,query:body.query,condition:body.condition,unit:body.unit,quantity:body.quantity,...(uses?{semantic:body.semantic,rerank:body.rerank,consent:body.consent}:{})});
+    output.innerHTML='<p class="list-empty">正在查询参考资料…</p>';const done=busyButton(form.querySelector('button[type=submit]'),'查询中…');
     run(async()=>{try{const result=await request('/references/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(output.isConnected)output.innerHTML=referenceResult(result)}catch(error){if(output.isConnected)output.innerHTML=`<p class="reference-warning">${esc(error.message)}，可调整后重试。</p>`;throw error}finally{done()}});
   };
 }
 views.references=()=>{W().innerHTML='<div class="w-body" id="deskReferences"></div>';renderReferences($('deskReferences'))};
 window.renderAgentReferences=turn=>turn.references?.length?`<details class="agent-reference-evidence"><summary>本轮查询依据 · ${turn.references.length} 项</summary>${turn.references.map(item=>`<section><h3>${esc(agentToolNames[item.tool]||item.tool)}</h3>${referenceResult(item.result)}</section>`).join('')}</details>`:'';
 
+function matchesInboxFilter(m,filter,query=''){
+  const effective=m.manual||m.decision,category=effective?.category;
+  if(filter==='unrouted'&&effective)return false;
+  if(filter==='need_review'&&!(!m.manual&&m.decision?.needs_review))return false;
+  if(filter==='new_rfq'&&category!=='new_rfq')return false;
+  if(filter==='revision'&&category!=='revision')return false;
+  if(filter==='linked'&&!m.case_id)return false;
+  const q=String(query||'').trim().toLowerCase();
+  if(!q)return true;
+  const hay=[m.subject,m.sender,m.preview,m.id,inboxLabels[category]||'待分流'].map(v=>String(v||'')).join(' ').toLowerCase();
+  return hay.includes(q);
+}
+window.rfqMatchesInboxFilter=matchesInboxFilter;
+
 async function showInbox(focusMailId=''){
   const reqId=++inboxRequest;
   workspaceMode('inbox');$('onsiteHomePanel').innerHTML='<p class="list-empty">读取收件箱…</p>';
-  const [messages,cases]=await Promise.all([request('/inbox'),request('/cases')]);
-  if(reqId!==inboxRequest||onsiteMode!=='inbox')return;
-  inboxItems=messages;caseList=cases;
-  renderInbox(focusMailId);
+  try{
+    const [messages,cases]=await Promise.all([request('/inbox'),request('/cases')]);
+    if(reqId!==inboxRequest||onsiteMode!=='inbox')return;
+    inboxItems=messages;caseList=cases;
+    if(focusMailId){inboxFilter='all';inboxQuery=''}
+    renderInbox(focusMailId);
+  }catch(e){
+    if(reqId!==inboxRequest||onsiteMode!=='inbox')return;
+    $('onsiteHomePanel').innerHTML=`<div class="list-empty"><b>收件箱读取失败</b><p>${esc(e?.message||'暂时无法连接')}</p><button type="button" class="btn" id="retryInbox">重试</button></div>`;
+    const btn=$('retryInbox');if(btn)btn.onclick=()=>run(()=>showInbox(focusMailId));
+    throw e;
+  }
 }
-function renderInbox(focusMailId=''){
-  const root=$('onsiteHomePanel');
-  const head=`<div class="onsite-panel-title"><span class="eyebrow">账号隔离 · 询价邮件</span><h2>询价收件箱</h2><p>样例保留真实Jev预置判定，可按需重新判断。实际模型和回退来源会显示在结果中。不确定或可疑邮件先交人工；修订需明确选择原工作单。</p><button type="button" class="btn" id="seedInbox">${inboxItems.length?'刷新样例':'载入 12 封样例'}</button></div>`;
-  root.innerHTML=head+`<div class="inbox-list">${inboxItems.length?inboxItems.map(m=>{
+function renderInboxList(root,focusMailId=''){
+  const listEl=root.querySelector('#inboxListContainer');
+  if(!listEl)return;
+  const visibleItems=inboxItems.filter(m=>matchesInboxFilter(m,inboxFilter,inboxQuery));
+  const activeCases=caseList.filter(c=>!c.archived);
+  listEl.innerHTML=visibleItems.length?visibleItems.map(m=>{
     const effective=m.manual||m.decision,category=effective?.category;
     const blocked=!effective||!m.manual&&m.decision.needs_review||!['new_rfq','revision'].includes(category);
     const state=m.case_id?'linked':effective?'judged':'idle';
@@ -128,26 +174,44 @@ function renderInbox(focusMailId=''){
           :m.decision?.frozen?`<button type="button" class="btn btn-ghost" data-triage-mail="${esc(m.id)}" data-force="1">让 Jev 重新判断一遍</button>`
           :`<button type="button" class="btn btn-ghost" data-triage-mail="${esc(m.id)}" disabled>已记录分流</button>`}
       </div>
-      ${m.case_id||!effective?'':`<form data-open-mail="${esc(m.id)}" class="inbox-open">${category==='revision'?`<label>关联原工作单<select name="case_id" required><option value="">请明确选择</option>${caseList.map(c=>`<option value="${esc(c.id)}">${esc(c.title)} · ${esc(tail(c.id))}</option>`).join('')}</select></label>`:''}<button type="submit" class="btn ${!blocked?'btn-primary':''}" ${blocked?'disabled':''}>${category==='revision'?'保存为原工作单的修订原件':'交给询价工作单'}</button></form>`}
+      ${m.case_id||!effective?'':`<form data-open-mail="${esc(m.id)}" class="inbox-open">${category==='revision'?`<label>关联原工作单<select name="case_id" required><option value="">请明确选择</option>${activeCases.map(c=>`<option value="${esc(c.id)}">${esc(c.title)} · ${esc(tail(c.id))}</option>`).join('')}</select></label>`:''}<button type="submit" class="btn ${!blocked?'btn-primary':''}" ${blocked?'disabled':''}>${category==='revision'?'保存为原工作单的修订原件':'交给询价工作单'}</button></form>`}
       ${!m.case_id?`<details class="inbox-review"><summary>人工确认或改判</summary><form data-review-mail="${esc(m.id)}"><label>分类<select name="category">${Object.entries(inboxLabels).map(([k,v])=>`<option value="${k}" ${category===k?'selected':''}>${v}</option>`).join('')}</select></label><label>判断依据<textarea name="reason" required minlength="5" maxlength="500" rows="2" placeholder="说明邮件意图，以及为什么应交给该流程"></textarea></label><button type="submit" class="btn">记录人工判断</button></form></details>`:''}
       <details class="inbox-source"><summary>邮件原文${m.events?.length?'与处理记录':''}</summary><pre>${esc(m.preview)}</pre>${m.events?.length?`<ol class="hint">${m.events.map(e=>`<li>${esc(e.at)} · ${esc(e.actor)} · ${esc(({triage:'模型/规则分流',manual_route:'人工确认分类',open_work_order:'关联工作单'})[e.action]||e.action)}${e.reason?' · '+esc(e.reason):''}</li>`).join('')}</ol>`:''}</details>
     </article>`;
-  }).join(''):'<p class="list-empty">载入预置邮件后，可以体验分流与人工改判。</p>'}</div>`;
-  $('seedInbox').onclick=()=>run(async()=>{const done=busyButton($('seedInbox'),'载入中…');try{await request('/inbox/samples',{method:'POST'});await showInbox()}finally{done()}});
-  root.querySelectorAll('[data-open-linked]').forEach(b=>{const m=inboxItems.find(x=>x.id===b.dataset.openLinked);b.onclick=()=>run(()=>openCase(m.case_id))});
-  root.querySelectorAll('[data-triage-mail]:not([disabled])').forEach(b=>b.onclick=()=>run(async()=>{const m=inboxItems.find(m=>m.id===b.dataset.triageMail),done=busyButton(b,'分流中…');try{await request(`/inbox/${m.id}/triage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,force:b.dataset.force==='1'})});await showInbox(m.id)}finally{done()}}));
-  root.querySelectorAll('[data-review-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();if(form.dataset.busy==='1')return;form.dataset.busy='1';const done=busyButton(form.querySelector('button[type=submit]'),'记录中…');run(async()=>{try{const m=inboxItems.find(m=>m.id===form.dataset.reviewMail),data=new FormData(form);await request(`/inbox/${m.id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,category:data.get('category'),reason:data.get('reason')})});await showInbox(m.id)}finally{delete form.dataset.busy;done()}})});
-  root.querySelectorAll('[data-open-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();if(form.dataset.busy==='1')return;form.dataset.busy='1';const done=busyButton(form.querySelector('button[type=submit]'),'处理中…');run(async()=>{try{const m=inboxItems.find(m=>m.id===form.dataset.openMail),data=new FormData(form);const result=await request(`/inbox/${m.id}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,case_id:data.get('case_id')||''})});await openCase(result.case_id);if(current?.id===result.case_id&&modelState.requests_enabled)setFocus('agent');
+  }).join(''):`<p class="list-empty">${inboxItems.length?'当前筛选或搜索条件下没有匹配的邮件。':'载入预置邮件后，可以体验分流与人工改判。'}</p>`;
+  listEl.querySelectorAll('[data-open-linked]').forEach(b=>{const m=inboxItems.find(x=>x.id===b.dataset.openLinked);b.onclick=()=>run(()=>openCase(m.case_id))});
+  listEl.querySelectorAll('[data-triage-mail]:not([disabled])').forEach(b=>b.onclick=()=>run(async()=>{const m=inboxItems.find(m=>m.id===b.dataset.triageMail),done=busyButton(b,'分流中…');try{await request(`/inbox/${m.id}/triage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,force:b.dataset.force==='1'})});await showInbox(m.id)}finally{done()}}));
+  listEl.querySelectorAll('[data-review-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();if(form.dataset.busy==='1')return;form.dataset.busy='1';const done=busyButton(form.querySelector('button[type=submit]'),'记录中…');run(async()=>{try{const m=inboxItems.find(m=>m.id===form.dataset.reviewMail),data=new FormData(form);await request(`/inbox/${m.id}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,category:data.get('category'),reason:data.get('reason')})});await showInbox(m.id)}finally{delete form.dataset.busy;done()}})});
+  listEl.querySelectorAll('[data-open-mail]').forEach(form=>form.onsubmit=e=>{e.preventDefault();if(form.dataset.busy==='1')return;form.dataset.busy='1';const done=busyButton(form.querySelector('button[type=submit]'),'处理中…');run(async()=>{try{const m=inboxItems.find(m=>m.id===form.dataset.openMail),data=new FormData(form);const result=await request(`/inbox/${m.id}/open`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:m.revision,case_id:data.get('case_id')||''})});await openCase(result.case_id);if(current?.id===result.case_id&&modelState.requests_enabled)setFocus('agent');
   // 进工作单时问一句，不强制把导览接上。
   try{window.rfqSpotlight?.maybeInviteCase?.(result.case_id)}catch{}
   }finally{delete form.dataset.busy;done()}})});
   if(focusMailId){
     const sel=typeof CSS!=='undefined'&&CSS.escape?CSS.escape(focusMailId):focusMailId.replace(/["\\]/g,'\\$&');
-    const card=root.querySelector(`.inbox-card[data-mail="${sel}"]`);
+    const card=listEl.querySelector(`.inbox-card[data-mail="${sel}"]`);
     if(card){
       card.classList.add('is-highlight');
       card.scrollIntoView?.({block:'center',behavior:'smooth'});
       setTimeout(()=>card.classList.remove('is-highlight'),3500);
     }
   }
+}
+function renderInbox(focusMailId=''){
+  const root=$('onsiteHomePanel');
+  const head=`<div class="onsite-panel-title"><span class="eyebrow">账号隔离 · 询价邮件</span><h2>询价收件箱</h2><p>样例保留真实Jev预置判定，可按需重新判断。实际模型和回退来源会显示在结果中。不确定或可疑邮件先交人工；修订需明确选择原工作单。</p><button type="button" class="btn" id="seedInbox">${inboxItems.length?'刷新样例':'载入 12 封样例'}</button></div>`;
+  const chips=inboxFilterDefs.map(([k,label])=>{
+    const count=inboxItems.filter(m=>matchesInboxFilter(m,k,'')).length;
+    return `<button type="button" role="tab" aria-selected="${inboxFilter===k}" class="${inboxFilter===k?'on':''}" data-inbox-filter="${k}">${label}${count?` <small>${count}</small>`:''}</button>`;
+  }).join('');
+  const toolbar=`<div class="inbox-toolbar"><div class="chips inbox-chips" role="tablist" aria-label="按分类筛选收件箱">${chips}</div><input id="inboxSearch" class="search" type="search" placeholder="搜索邮件主题、发件人或正文" value="${esc(inboxQuery)}" aria-label="搜索收件箱邮件"></div>`;
+  root.innerHTML=head+toolbar+'<div class="inbox-list" id="inboxListContainer"></div>';
+  $('seedInbox').onclick=()=>run(async()=>{const done=busyButton($('seedInbox'),'载入中…');try{await request('/inbox/samples',{method:'POST'});await showInbox()}finally{done()}});
+  root.querySelectorAll('[data-inbox-filter]').forEach(b=>b.onclick=()=>{
+    inboxFilter=b.dataset.inboxFilter;
+    root.querySelectorAll('[data-inbox-filter]').forEach(x=>{const on=x.dataset.inboxFilter===inboxFilter;x.classList.toggle('on',on);x.setAttribute('aria-selected',String(on))});
+    renderInboxList(root);
+  });
+  const searchEl=$('inboxSearch');
+  if(searchEl)searchEl.oninput=()=>{inboxQuery=searchEl.value;renderInboxList(root)};
+  renderInboxList(root,focusMailId);
 }

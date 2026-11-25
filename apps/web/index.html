@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,">
 <title>RFQ Desk · 航材询报价工作台</title>
-<link rel="stylesheet" href="style.css?v=20261124-fix2">
+<link rel="stylesheet" href="style.css?v=20261125-v2">
 </head>
 <body data-view="work" data-auth="pending">
 
@@ -138,6 +138,7 @@
   <section id="onsiteHomePanel" class="onsite-panel" hidden aria-live="polite"></section>
   <section class="land-cases" aria-label="工作单列表">
     <div class="sec-row"><h3>全部工作单</h3><input id="landingFilter" class="search" type="search" placeholder="搜索文件名或编号" aria-label="筛选工作单"></div>
+    <div class="case-filter-bar" id="caseStatusBar" role="tablist" aria-label="按工作单状态筛选"></div>
     <div class="case-list-head" aria-hidden="true"><span>工作单</span><span>当前事项</span><span>版本 / 行数</span></div>
     <div id="landingCases" class="case-grid" aria-live="polite"><div class="list-empty loading-empty"><b>正在读取工作单…</b></div></div>
     <p class="list-footnote">只显示当前账号的工作单。选择一单进入处理。</p>
@@ -159,7 +160,7 @@
       </form>
     </details>
     <section class="tour-card" id="tourCard" hidden>
-      <div class="tour-head"><b>跟着引导体验一次 · 约 3 分钟</b><span>询价 Agent 读一封客户邮件，你来核对、核价、批准和导出。</span></div>
+      <div class="tour-head"><b id="tourTitle">跟着引导体验一次 · 约 3 分钟</b><span id="tourDesc">询价 Agent 读一封客户邮件，你来核对、核价、批准和导出。</span></div>
       <button type="button" class="btn btn-sm" id="tourStart">开始引导体验</button>
     </section>
     <details class="more-examples">
@@ -251,7 +252,7 @@
   <div class="dlg-head"><h2>账号管理</h2><button type="button" class="icon-btn" id="closeAccounts" aria-label="关闭账号管理">×</button></div>
   <p class="hint">开通普通用户账号，初始密码须私下交给本人，首次登录时修改。停用会立即撤销该账号的登录会话。</p>
   <form id="createAccountForm" class="account-create">
-    <label>账号<input id="createUsername" autocomplete="off" pattern="[a-z0-9][a-z0-9_.\-]{2,39}" required maxlength="40" placeholder="如 zhang.san"></label>
+    <label>账号<input id="createUsername" autocomplete="off" pattern="[a-z0-9][a-z0-9_.\-]{2,39}" title="3–40 位小写字母或数字开头，可含小写字母、数字、下划线、点或连字符（如 zhang.san）" required maxlength="40" placeholder="如 zhang.san"></label>
     <label>姓名<input id="createName" required maxlength="60" autocomplete="off"></label>
     <label>初始密码<input id="createPassword" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
     <button type="submit" class="btn btn-primary">开通账号</button>
@@ -262,17 +263,17 @@
 </dialog>
 
 
-<script src="draft-store.js?v=20261025t"></script>
-<script src="interaction.js?v=20261025t"></script>
-<script src="config.js?v=20261026q"></script>
-<script src="ui-state.js?v=20261026q"></script>
-<script src="account-storage.js?v=20261110pre1"></script>
-<script src="dialog.js?v=20261124-fix1"></script>
-<script src="app.js?v=20261124-fix1"></script>
-<script src="accounts.js?v=20261124-fix1"></script>
-<script src="work.js?v=20261124-fix1"></script>
-<script src="spotlight.js?v=20261124-fix1"></script>
-<script src="onsite.js?v=20261124-fix1"></script>
-<script src="home.js?v=20261124-fix1"></script>
+<script src="draft-store.js?v=20261125-v2"></script>
+<script src="interaction.js?v=20261125-v2"></script>
+<script src="config.js?v=20261125-v2"></script>
+<script src="ui-state.js?v=20261125-v2"></script>
+<script src="account-storage.js?v=20261125-v2"></script>
+<script src="dialog.js?v=20261125-v2"></script>
+<script src="app.js?v=20261125-v2"></script>
+<script src="accounts.js?v=20261125-v2"></script>
+<script src="work.js?v=20261125-v2"></script>
+<script src="spotlight.js?v=20261125-v2"></script>
+<script src="onsite.js?v=20261125-v2"></script>
+<script src="home.js?v=20261125-v2"></script>
 </body>
 </html>

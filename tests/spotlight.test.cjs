@@ -594,3 +594,196 @@ test('wide overview step excludes bubble own .btn-primary so it never oscillates
     assert.equal(env.dbg.bubble.style.top,firstTop,'wide bubble must not oscillate vertically');
   }
 });
+
+test('U1: failed home turns never advance home tour, while offline local turns advance cleanly',()=>{
+  const env=makeSpotlightEnv({mobile:false,deskOpen:false,requestsEnabled:false});
+  env.api.start(null);
+  env.dbg.root.querySelector('.coach-next').click(); // 0 -> 1
+  env.dbg.root.querySelector('.coach-next').click(); // 1 -> 2 (home-ask-todo)
+  assert.equal(env.dbg.getState().step,2);
+
+  // Failed turn has reply text AND error: true -> must NOT advance
+  env.ctx.ahState.turns.push({message:'有什么要我审的？',reply:'未完成：网络中断',error:true,pending:false});
+  assert.equal(env.dbg.completedHomeTurns(),0);
+  env.dbg.tick();
+  assert.equal(env.dbg.getState().step,2,'failed home turn must not advance step');
+
+  // Offline local rule summary turn -> advances cleanly
+  env.ctx.ahState.turns.push({message:'有什么要我审的？',reply:'今天有 2 封待分流',local:true,mode:'offline-local',pending:false});
+  assert.equal(env.dbg.completedHomeTurns(),1);
+  env.dbg.tick();
+  assert.equal(env.dbg.getState().step,3);
+  assert.match(env.dbg.root.querySelector('.coach-body').textContent,/离线模式/);
+});
+
+test('U2: dynamic step numbering (1/6..6/6), done steps never show skipped, offline done copy adapts',()=>{
+  const env=makeSpotlightEnv({
+    deskOpen:true,requestsEnabled:false,
+    current:{
+      id:'c-off',revision:1,case_approved:false,
+      rows:[
+        {id:'r1',rfq:'RFQ-1',part:'SYN-001',excluded:false,price:null,approved:false},
+        {id:'r2',rfq:'RFQ-1',part:'SYN-003',excluded:false,price:null,approved:false},
+      ],
+      prices:[],progress:{},events:[],candidate_batches:[],clarifications:[],
+    },
+  });
+  env.api.start('c-off',{skipAgent:true});
+  assert.equal(env.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 1 / 6');
+
+  // Next -> price (2 / 6), never 10 / 15 or 已跳过
+  env.dbg.root.querySelector('.coach-next').click();
+  assert.equal(env.dbg.steps()[env.dbg.getState().step].id,'price');
+  assert.equal(env.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 2 / 6');
+  assert.doesNotMatch(env.dbg.root.querySelector('.coach-count').textContent,/已跳过/);
+
+  // Complete pricing -> auto-advances to approve (3 / 6), NOT counted as skipped
+  env.ctx.current.rows[0].price={amount:'10',currency:'USD',kind:'synthetic'};
+  env.ctx.current.rows[1].price={amount:'20',currency:'USD',kind:'manual'};
+  env.dbg.tick();
+  assert.equal(env.dbg.steps()[env.dbg.getState().step].id,'approve');
+  assert.equal(env.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 3 / 6');
+  assert.doesNotMatch(env.dbg.root.querySelector('.coach-count').textContent,/已跳过/);
+  // U19: offline approve copy does not promise MatrixOne snapshot
+  assert.match(env.dbg.root.querySelector('.coach-body').textContent,/锁定当前快照与版本记录/);
+  assert.doesNotMatch(env.dbg.root.querySelector('.coach-body').textContent,/MatrixOne/);
+
+  // Complete approve -> preview (4 / 6) -> export (5 / 6) -> done (6 / 6)
+  env.ctx.current.rows.forEach(r=>r.approved=true);
+  env.ctx.current.case_approved=true;
+  env.dbg.tick();
+  assert.equal(env.dbg.steps()[env.dbg.getState().step].id,'preview');
+  assert.equal(env.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 4 / 6');
+
+  env.byId.get('quoteFrame').hidden=false;
+  env.dbg.tick();
+  assert.equal(env.dbg.steps()[env.dbg.getState().step].id,'export');
+  assert.equal(env.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 5 / 6');
+
+  env.ctx.window.rfqLastExport={caseId:'c-off',revision:1};
+  env.dbg.tick();
+  assert.equal(env.dbg.steps()[env.dbg.getState().step].id,'done');
+  assert.equal(env.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 6 / 6');
+  assert.match(env.dbg.root.querySelector('.coach-body').textContent,/版本与决策记录/);
+  assert.doesNotMatch(env.dbg.root.querySelector('.coach-body').textContent,/批准后改过什么/);
+
+  // Offline empty case -> 1 / 2 -> 2 / 2 with accurate empty-case copy
+  const envEmpty=makeSpotlightEnv({
+    deskOpen:true,requestsEnabled:false,
+    current:{id:'c-empty',revision:1,rows:[],prices:[],progress:{},events:[],candidate_batches:[],clarifications:[]},
+  });
+  envEmpty.api.start('c-empty',{skipAgent:true});
+  assert.equal(envEmpty.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 1 / 2');
+  envEmpty.dbg.root.querySelector('.coach-next').click();
+  assert.equal(envEmpty.dbg.steps()[envEmpty.dbg.getState().step].id,'done');
+  assert.equal(envEmpty.dbg.root.querySelector('.coach-count').textContent,'3 分钟体验 · 2 / 2');
+  assert.match(envEmpty.dbg.root.querySelector('.coach-body').textContent,/离线模式且本单尚无正式询价行/);
+});
+
+test('U5: price step automatically switches focus from already-priced row to next unpriced row',()=>{
+  const env=makeSpotlightEnv({
+    deskOpen:true,requestsEnabled:false,
+    current:{
+      id:'c-price',revision:1,
+      rows:[
+        {id:'r1',rfq:'RFQ-1',part:'SYN-001',excluded:false,price:null,approved:false},
+        {id:'r2',rfq:'RFQ-1',part:'SYN-003',excluded:false,price:null,approved:false},
+      ],
+      prices:[],progress:{},candidate_batches:[],clarifications:[],
+    },
+  });
+  env.api.start('c-price',{skipAgent:true});
+  env.dbg.root.querySelector('.coach-next').click(); // enters price on r1
+  assert.equal(env.ctx.focus.type,'price');
+  assert.equal(env.ctx.focus.id,'r1');
+
+  // Demo price covers SYN-001 (r1), leaving SYN-003 (r2) unpriced
+  env.ctx.current.rows[0].price={amount:'12.5',currency:'USD',kind:'synthetic'};
+  env.ctx.current.prices=[{part:'SYN-001',kind:'synthetic'}];
+  env.dbg.tick();
+  assert.equal(env.ctx.focus.type,'price');
+  assert.equal(env.ctx.focus.id,'r2','must auto-switch focus to next unpriced row SYN-003');
+});
+
+test('U6: wide home sidebar scrolls, hole clips below header, multi-target scrolls clipped bottom button, mobile uses mainView rect',()=>{
+  // 1) Wide home sidebar (1440 - 1000 = 440 >= 260) must still call scrollIntoView
+  const wideEnv=makeSpotlightEnv({mobile:false,deskOpen:false,innerWidth:1440,innerHeight:800});
+  const briefEl=wideEnv.selectors.get('#ahLog .ah-briefline');
+  briefEl.rect={left:120,top:900,right:800,bottom:980,width:680,height:80};
+  let wideScrolled=0;
+  briefEl.scrollIntoView=()=>{wideScrolled++};
+  wideEnv.api.start(null);
+  wideEnv.dbg.root.querySelector('.coach-next').click(); // step 1 (home-brief)
+  assert.equal(wideScrolled,1,'wide home sidebar must execute scrollIntoView');
+
+  // 2) Desktop .coach-hole clips top/height below .top bar (60px)
+  const topBarEl=new FakeElement('header');
+  topBarEl.rect={left:0,top:0,right:1440,bottom:60,width:1440,height:60};
+  wideEnv.selectors.set('.top',topBarEl);
+  briefEl.rect={left:120,top:20,right:800,bottom:130,width:680,height:110};
+  wideEnv.dbg.tick();
+  assert(parseFloat(wideEnv.dbg.hole.style.top)>=60,'hole top must be clipped at or below .top bottom');
+  assert.equal(parseFloat(wideEnv.dbg.hole.style.top),60);
+  assert.equal(parseFloat(wideEnv.dbg.hole.style.height),78); // (130+8) - 60 = 78
+
+  // 3) Multi-element target: top element visible, bottom button clipped below viewport -> bottom button scrolls
+  const multiEnv=makeSpotlightEnv({mobile:false,deskOpen:false,innerWidth:1100,innerHeight:700});
+  const inp=multiEnv.byId.get('ahInput'),send=multiEnv.byId.get('ahSend');
+  inp.rect={left:100,top:500,right:700,bottom:620,width:600,height:120};
+  send.rect={left:600,top:660,right:700,bottom:740,width:100,height:80}; // clipped below 700-24
+  let inpScrolled=0,sendScrolled=0;
+  inp.scrollIntoView=()=>{inpScrolled++};
+  send.scrollIntoView=()=>{sendScrolled++};
+  multiEnv.api.start(null);
+  multiEnv.dbg.root.querySelector('.coach-next').click(); // 1
+  multiEnv.dbg.root.querySelector('.coach-next').click(); // 2 (home-ask-todo -> [ahInput, ahSend])
+  assert.equal(sendScrolled,1,'clipped bottom button in multi-target must scroll into view');
+  assert.equal(inpScrolled,0);
+
+  // 4) Mobile coach-docked uses mainView().getBoundingClientRect() visible window
+  const mobEnv=makeSpotlightEnv({mobile:true,deskOpen:false,innerWidth:375,innerHeight:812,vvHeight:812});
+  mobEnv.els.agentHome.rect={left:0,top:80,right:375,bottom:460,width:375,height:380};
+  const mobBrief=mobEnv.selectors.get('#ahLog .ah-briefline');
+  // Bottom 500 is < innerHeight-180 (632), so old check wouldn't scroll, but > mainView bottom (460) -> MUST scroll!
+  mobBrief.rect={left:16,top:420,right:359,bottom:500,width:343,height:80};
+  let mobScrolled=0;
+  mobBrief.scrollIntoView=()=>{mobScrolled++};
+  mobEnv.api.start(null);
+  mobEnv.dbg.root.querySelector('.coach-next').click(); // step 1
+  assert.equal(mobScrolled,1,'mobile docked scroll check must use mainView() bounding rect');
+});
+
+test('U7, U12 & U14: partial candidate dispute targets #candAccept, src-open pauses hole, onCaseSwitch clears old tour',()=>{
+  const env=makeSpotlightEnv({
+    deskOpen:true,
+    current:{
+      id:'c-cand',revision:1,
+      rows:[{id:'r1',rfq:'RFQ-1',part:'PN-1',excluded:false,price:null,approved:false}],
+      prices:[],progress:{pending_candidates:1},
+      candidate_batches:[{id:'b1',expected_revision:1,candidates:[{id:'x1',status:'pending',fields:{rfq:'RFQ-1',part:'PN-1'},field_sources:{part:{file:'rev.eml',sha256:'h2'}}}]}],
+      clarifications:[],
+    },
+  });
+  const candMode=new FakeElement('select','candMode');
+  candMode.value='partial';
+  env.selectors.set('#candMode',candMode);
+  env.ctx.focus={type:'cand',id:'b1:x1'};
+  assert.equal(env.dbg.candHasDispute(),true,'partial mode must be treated as single-row dispute');
+  const acceptStep=env.dbg.STEPS.find(s=>s.id==='cand-accept');
+  assert(acceptStep.target().includes(env.byId.get('candAccept')));
+  assert(!acceptStep.target().includes(env.byId.get('candAcceptBatch')));
+
+  // U12: src-open pauses hole dimming
+  assert.equal(env.dbg.hasOverlayOpen(),false);
+  env.body.classList.add('src-open');
+  assert.equal(env.dbg.hasOverlayOpen(),true);
+  env.body.classList.remove('src-open');
+
+  // U14: onCaseSwitch clears previous case tour state
+  env.api.start('c-cand',{skipAgent:true});
+  assert.equal(env.api.active(),true);
+  env.api.onCaseSwitch('c-other');
+  assert.equal(env.api.active(),false);
+  assert.equal(env.dbg.root.hidden,true);
+  assert.equal(env.dbg.pill.hidden,true);
+});

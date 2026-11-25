@@ -15,6 +15,7 @@ const getChat=()=>{
 const currentAgentTurns=()=>getChat().turns||[];
 const currentAgentBusy=()=>!!getChat().busy;
 const modelEnabled=()=>typeof modelState==='undefined'||!!modelState?.requests_enabled;
+const matrixOneConnected=()=>typeof modelState!=='undefined'&&Boolean(modelState?.matrixone?.connected||modelState?.platform_connected);
 const generalCands=()=>{
   if(typeof current==='undefined'||!current)return [];
   if(typeof summarize==='function')return summarize(current).cands||[];
@@ -48,7 +49,7 @@ const isInboxMode=()=>{
   if(typeof onsiteMode!=='undefined')return onsiteMode==='inbox';
   return document.getElementById('workspaceInbox')?.getAttribute('aria-pressed')==='true';
 };
-const completedHomeTurns=()=>(window.ahState?.turns||[]).filter(t=>!t.pending&&Boolean(t.reply)).length;
+const completedHomeTurns=()=>(window.ahState?.turns||[]).filter(t=>!t.pending&&!t.error&&Boolean(t.reply)).length;
 
 const toAgent=()=>{
   if(typeof focus==='undefined'||focus?.type!=='agent')setFocus('agent');
@@ -81,7 +82,11 @@ const candHasDispute=()=>{
   const c=currentCandObj();
   const err=q('#candError')?.textContent?.trim();
   if(err)return true;
+  if(q('#candMode')?.value==='partial')return true;
+  const batchBtn=q('#candAcceptBatch');
+  if(batchBtn&&(batchBtn.hidden||batchBtn.disabled))return true;
   if(c&&Array.isArray(c.unknown_fields)&&c.unknown_fields.length)return true;
+  if(c&&c.fields?.rfq&&rows().some(r=>r.rfq===c.fields.rfq&&r.part===c.fields.part))return true;
   return false;
 };
 
@@ -187,7 +192,26 @@ const STEPS=[
     if(r)setFocus('price',r.id);
     ensureMobileView('work');
   },
+  sync:()=>{
+    if(typeof focus==='undefined'||focus?.type!=='price')return;
+    const curRow=rows().find(x=>x.id===focus.id);
+    const nextUnpriced=rows().find(x=>!x.price);
+    if(curRow?.price&&nextUnpriced){
+      setFocus('price',nextUnpriced.id);
+      ensureMobileView('work');
+      lastScroll=-1;
+    }
+  },
   target:()=>{
+    if(typeof focus!=='undefined'&&focus?.type==='price'){
+      const curRow=rows().find(x=>x.id===focus.id);
+      const nextUnpriced=rows().find(x=>!x.price);
+      if(curRow?.price&&nextUnpriced){
+        setFocus('price',nextUnpriced.id);
+        ensureMobileView('work');
+        lastScroll=-1;
+      }
+    }
     const loadBtn=q('#loadPricesInline')||q('#loadPrices');
     const saveBtn=q('#savePrice');
     const hasSynthetic=Boolean(current?.prices?.some(p=>p.kind==='synthetic'));
@@ -223,7 +247,9 @@ const STEPS=[
   body:()=>{
     const btn=q('#approve');
     if(!btn||btn.disabled)return '当前工作单仍有阻断项尚未解除，“批准当前版本”暂不可用。可先点上方红色事项旁的“处理”解除阻断，或点“跳过这一步”。';
-    return '批准人绑定当前登录身份。批准把这一版询价、价格和澄清状态锁定，同时在 MatrixOne 存一个快照；之后任何改动都会让批准失效。';
+    return matrixOneConnected()
+      ?'批准人绑定当前登录身份。批准把这一版询价、价格和澄清状态锁定，同时在 MatrixOne 存一个快照；之后任何改动都会让批准失效。'
+      :'批准人绑定当前登录身份。批准把这一版询价、价格和澄清状态锁定，锁定当前快照与版本记录；之后任何改动都会让批准失效。';
   },
   done:()=>caseReady()},
  {id:'preview',kind:'act',
@@ -238,12 +264,28 @@ const STEPS=[
   enter:()=>{if(focus?.type!=='output')setFocus('output','o');ensureMobileView('work')},
   target:()=>q('#exportCsv'),
   title:'导出这一版',
-  body:'点“导出 CSV”。正式输出由服务器再次核验并记录，下载的文件绑定当前批准版本。',
+  body:'点“导出 CSV”或“导出 Excel (.xlsx)”。正式输出由服务器再次核验并记录，下载的文件绑定当前批准版本。',
   done:()=>exported(current)},
  {id:'done',kind:'look',
-  target:()=>mobileGuide()?[q('#mAgent')]:[q('#agentEntry'),q('#mAgent')],
+  target:()=>{
+    if(!modelEnabled()&&!currentAgentTurns().length){
+      const logBtn=q('[data-focus="log"]')||q('.queue-more');
+      if(logBtn&&visible(logBtn))return [logBtn];
+    }
+    return mobileGuide()?[q('#mAgent')]:[q('#agentEntry'),q('#mAgent')];
+  },
   title:'体验完成',
-  body:'Agent 读邮件、提候选、查价、起草澄清；你核对、接纳、核价、批准、导出。之后可以随时从这里回到 Agent 继续问它，比如“批准后改过什么”。',next:'完成'},
+  body:()=>{
+    const noAgent=!currentAgentTurns().length;
+    if(!modelEnabled()&&noAgent){
+      if(!rows().length)return '当前处于离线模式且本单尚无正式询价行。可先导入表格/邮件，或在「原件与修订候选」生成离线标签候选，完成核对、核价、批准与导出；随时可在「版本与决策记录」查看本地版本差异。';
+      return '已完成离线工作单的核心步骤：核对询价行、补齐价格依据、批准并导出报价。之后可随时在左侧「版本与决策记录」对比本地版本差异与审计记录。';
+    }
+    if(state?.skipAgent&&noAgent){
+      return '已完成人工核对、核价、批准与导出流程。可随时在左侧「版本与决策记录」对比版本差异，或在需要时打开「询价 Agent」继续提问。';
+    }
+    return 'Agent 读邮件、提候选、查价、起草澄清；你核对、接纳、核价、批准、导出。之后可以随时从这里回到 Agent 继续问它，比如“批准后改过什么”。';
+  },next:'完成'},
 ];
 
 const HOME_STEPS=[
@@ -275,7 +317,9 @@ const HOME_STEPS=[
     if(i&&!mobileGuide())i.focus();
   },
   title:'只给描述，也能找件号',
-  body:'这次只给一句人话，不给件号。它会先做向量检索，列出候选件号、相似度和库位；选哪一个由你定。',
+  body:()=>modelEnabled()
+    ?'这次只给一句人话，不给件号。它会先做向量检索，列出候选件号、相似度和库位；选哪一个由你定。'
+    :'离线模式下会按本地规则与参考库检索候选件号和库位，不调用联网模型；选哪一个由你定。',
   done:()=>!window.ahState?.busy&&state&&state.baseStep===state.step&&typeof state.baseTurns==='number'&&completedHomeTurns()>state.baseTurns},
  {id:'home-inbox',kind:'act',
   target:()=>document.querySelector('[data-ah-go="inbox"]'),
@@ -352,7 +396,8 @@ const hasOverlayOpen=()=>Boolean(
   document.querySelector('dialog[open]')||
   document.querySelector('.drawer:not([hidden]), .drawer.open')||
   document.querySelector('.pop:not([hidden])')||
-  document.querySelector('.account-menu[open]')
+  document.querySelector('.account-menu[open]')||
+  document.body.classList.contains('src-open')
 );
 
 function clearGuideTarget(){
@@ -420,10 +465,22 @@ function place(step){
     if(els.length&&lastScroll!==state.step){
       lastScroll=state.step;
       requestAnimationFrame(()=>{
-        if(state&&els[0]?.isConnected){
-          const box=els[0].getBoundingClientRect();
-          if(box.top<64||box.bottom>innerHeight-180)els[0].scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
-        }
+        const alive=els.filter(e=>e?.isConnected);
+        if(!state||!alive.length)return;
+        try{
+          const view=mainView();
+          const vRect=view&&visible(view)?view.getBoundingClientRect():null;
+          const visTop=vRect?Math.max(vRect.top+8,0):64;
+          const visBottom=vRect?Math.min(vRect.bottom-8,innerHeight):innerHeight-180;
+          const boxes=alive.map(e=>e.getBoundingClientRect());
+          const minTop=Math.min(...boxes.map(b=>b.top));
+          const maxBottom=Math.max(...boxes.map(b=>b.bottom));
+          if(minTop<visTop||maxBottom>visBottom){
+            const bottomClipped=alive.length>1&&maxBottom>visBottom&&minTop>=visTop;
+            const targetEl=bottomClipped?alive[alive.length-1]:alive[0];
+            targetEl.scrollIntoView({block:bottomClipped?'end':'center',inline:'nearest',behavior:'instant'});
+          }
+        }catch{}
       });
     }
     return;
@@ -469,54 +526,67 @@ function place(step){
     return;
   }
 
-  hole.hidden=hasOverlayOpen();
-  Object.assign(hole.style,{left:r.left+'px',top:r.top+'px',width:(r.right-r.left)+'px',height:(r.bottom-r.top)+'px'});
+  const topEl=q('.top');
+  const headerBottom=Math.max(60,Math.round(topEl&&visible(topEl)?topEl.getBoundingClientRect().bottom:60));
+  const holeLeft=Math.max(0,r.left);
+  const holeTop=Math.max(headerBottom,r.top);
+  const holeBottom=Math.min(H-4,r.bottom);
+  const holeHeight=Math.max(0,holeBottom-holeTop);
+  const holeWidth=Math.max(0,r.right-holeLeft);
+  hole.hidden=hasOverlayOpen()||holeHeight<=0||holeWidth<=0;
+  Object.assign(hole.style,{left:holeLeft+'px',top:holeTop+'px',width:holeWidth+'px',height:holeHeight+'px'});
 
   if(homeSidebarRoom>=260){
     const wr=wrap.getBoundingClientRect();
     const tw=Math.min(homeSidebarRoom-20,340),bh=measureHeight(tw);
     const [left,top]=clamp(Math.round(wr.right+10),Math.round((H-bh)/2),tw,bh);
     bubble.style.left=left+'px';bubble.style.top=top+'px';bubble.style.transform='';
-    return;
-  }
+  }else{
+    const bw=Math.min(340,W-24),bh=measureHeight(bw);
+    const src=document.querySelector('.source')?.getBoundingClientRect();
+    const over=(x,y,b)=>overlapArea(x,y,bw,bh,b)>0;
+    const spots=[
+      [r.left,r.bottom+gap],
+      [r.left,r.top-gap-bh],
+      [r.right+gap,r.top],
+      [r.left-gap-bw,r.top],
+      [r.right-bw,r.bottom+gap],
+      [r.right-bw,r.top-gap-bh],
+      [W-bw-12,topBar],
+      [12,topBar],
+      [12,H-bh-12],
+      [W-bw-12,H-bh-12],
+    ].map(([x,y])=>clamp(x,y,bw,bh));
 
-  const bw=Math.min(340,W-24),bh=measureHeight(bw);
-  const src=document.querySelector('.source')?.getBoundingClientRect();
-  const over=(x,y,b)=>overlapArea(x,y,bw,bh,b)>0;
-  const spots=[
-    [r.left,r.bottom+gap],
-    [r.left,r.top-gap-bh],
-    [r.right+gap,r.top],
-    [r.left-gap-bw,r.top],
-    [r.right-bw,r.bottom+gap],
-    [r.right-bw,r.top-gap-bh],
-    [W-bw-12,topBar],
-    [12,topBar],
-    [12,H-bh-12],
-    [W-bw-12,H-bh-12],
-  ].map(([x,y])=>clamp(x,y,bw,bh));
-
-  const ok=spots.filter(([x,y])=>!over(x,y,r));
-  const clear=spots.filter(([x,y])=>!rs.some(b=>over(x,y,b)));
-  let picked=ok.find(([x,y])=>!over(x,y,src))||ok[0]||clear.find(([x,y])=>!over(x,y,src))||clear[0];
-  if(!picked){
-    picked=spots.reduce((acc,pos)=>{
-      const score=rs.reduce((s,b)=>s+overlapArea(pos[0],pos[1],bw,bh,b),0)+overlapArea(pos[0],pos[1],bw,bh,r)*0.1;
-      return !acc||score<acc.score?{pos,score}:acc;
-    },null).pos;
+    const ok=spots.filter(([x,y])=>!over(x,y,r));
+    const clear=spots.filter(([x,y])=>!rs.some(b=>over(x,y,b)));
+    let picked=ok.find(([x,y])=>!over(x,y,src))||ok[0]||clear.find(([x,y])=>!over(x,y,src))||clear[0];
+    if(!picked){
+      picked=spots.reduce((acc,pos)=>{
+        const score=rs.reduce((s,b)=>s+overlapArea(pos[0],pos[1],bw,bh,b),0)+overlapArea(pos[0],pos[1],bw,bh,r)*0.1;
+        return !acc||score<acc.score?{pos,score}:acc;
+      },null).pos;
+    }
+    bubble.style.left=Math.round(picked[0])+'px';
+    bubble.style.top=Math.round(picked[1])+'px';
+    bubble.style.transform='';
   }
-  bubble.style.left=Math.round(picked[0])+'px';
-  bubble.style.top=Math.round(picked[1])+'px';
-  bubble.style.transform='';
 
   if(lastScroll!==state.step){
     lastScroll=state.step;
     requestAnimationFrame(()=>{
-      if(!state||!els[0]?.isConnected)return;
+      const alive=els.filter(e=>e?.isConnected);
+      if(!state||!alive.length)return;
       try{
-        const box=els[0].getBoundingClientRect();
-        if(box.top<72||box.bottom>innerHeight-72){
-          els[0].scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'});
+        const boxes=alive.map(e=>e.getBoundingClientRect());
+        const minTop=Math.min(...boxes.map(b=>b.top));
+        const maxBottom=Math.max(...boxes.map(b=>b.bottom));
+        const safeTop=Math.max(headerBottom+12,72);
+        const safeBottom=innerHeight-24;
+        if(minTop<safeTop||maxBottom>safeBottom){
+          const bottomClipped=alive.length>1&&maxBottom>safeBottom&&minTop>=safeTop;
+          const targetEl=bottomClipped?alive[alive.length-1]:(maxBottom>safeBottom&&alive.length>1?alive[alive.length-1]:alive[0]);
+          targetEl.scrollIntoView({block:bottomClipped?'end':'center',inline:'nearest',behavior:'smooth'});
         }
       }catch{}
     });
@@ -524,6 +594,36 @@ function place(step){
 }
 
 function steps(){return state&&!state.caseId?HOME_STEPS:STEPS}
+
+function effectiveSteps(list){
+  if(!state||!state.caseId)return list;
+  const visited=new Set(Array.isArray(state.visited)?state.visited:[]);
+  const cur=list[state.step];
+  const agentSkipped=Boolean(state.skipAgent)||(!modelEnabled()&&!currentAgentTurns().length&&!currentAgentBusy());
+  const agentPending=!agentSkipped&&!currentAgentTurns().length;
+  const hasCands=generalCands().length>0;
+  const hasRows=rows().length>0;
+  const willHaveRows=hasRows||hasCands||agentPending;
+  return list.filter((s,i)=>{
+    if(cur&&s.id===cur.id)return true;
+    if(visited.has(s.id))return true;
+    if(i<state.step)return false;
+    if(s.id==='layout'||s.id==='done')return true;
+    if(s.phase==='agent'){
+      if(agentSkipped)return false;
+      if(s.id==='agent-tl')return agentPending||hasAgentTimeline();
+      if(s.id==='agent-draft')return hasAgentDraft();
+      if(s.id==='agent-next')return agentPending||hasCands;
+      return !s.skip?.();
+    }
+    if(s.id==='cand-look'||s.id==='cand-accept')return hasCands||(agentPending&&!hasRows);
+    if(s.id==='parse-review')return Boolean(current?.progress?.pending_parse_review);
+    if(s.id==='price')return willHaveRows&&(!hasRows||!rows().every(r=>r.price));
+    if(s.id==='approve')return willHaveRows&&!caseReady();
+    if(s.id==='preview'||s.id==='export')return willHaveRows;
+    return !s.skip?.();
+  });
+}
 
 function end(completed=false){
   if(state)setFlag(state.caseId?'case-'+(completed?'done':'declined'):'home-'+(completed?'done':'declined'));
@@ -650,13 +750,21 @@ function renderTick(){
   }
 
   const list=steps();
-  let skippedNow=0;
-  while(list[state.step]&&(list[state.step].skip?.()||(list[state.step].kind==='act'&&list[state.step].done?.()))){
-    state={...state,step:state.step+1};
+  let autoSkipped=0;
+  while(list[state.step]){
+    const cur=list[state.step];
+    const visited=Array.isArray(state.visited)?[...state.visited]:[];
+    const wasEntered=visited.includes(cur.id);
+    const isDone=wasEntered&&cur.kind==='act'&&Boolean(cur.done?.());
+    const isSkip=!isDone&&(Boolean(cur.skip?.())||(cur.kind==='act'&&Boolean(cur.done?.())));
+    if(!isDone&&!isSkip)break;
+    if(isSkip)autoSkipped++;
+    state={...state,step:state.step+1,visited,skipped:isDone?0:(state.skipped||0)};
     delete state.baseStep;delete state.baseTurns;
-    entered=-1;lastScroll=-1;mobileExpanded=false;skippedNow++;save();
+    entered=-1;lastScroll=-1;mobileExpanded=false;
+    save();
   }
-  if(skippedNow){state={...state,skipped:(state.skipped||0)+skippedNow};save()}
+  if(autoSkipped&&state){state={...state,skipped:(state.skipped||0)+autoSkipped};save()}
   const step=list[state.step];
   if(!step){end(true);return}
 
@@ -667,14 +775,21 @@ function renderTick(){
 
   if(entered!==state.step){
     entered=state.step;stepAt=Date.now();waitAt=null;mobileExpanded=false;
+    const visited=Array.isArray(state.visited)?[...state.visited]:[];
+    if(!visited.includes(step.id)){visited.push(step.id);state={...state,visited};save()}
     step.enter?.();
     try{step.fill?.()}catch{}
   }
+  step.sync?.();
+
+  const plan=effectiveSteps(list);
+  const displayIdx=Math.max(0,plan.findIndex(s=>s.id===step.id));
+  const displayStep=displayIdx+1,displayTotal=plan.length||1;
 
   root.hidden=false;
   if(state.min){
     hole.hidden=true;bubble.hidden=true;reopen.hidden=false;
-    setHtml(reopen,`继续引导 · <b class="coach-reopen-count">${state.step+1} / ${list.length}</b>`);
+    setHtml(reopen,`继续引导 · <b class="coach-reopen-count">${displayStep} / ${displayTotal}</b>`);
     document.body.classList.remove('coaching');
     clearGuideTarget();
     return;
@@ -682,7 +797,7 @@ function renderTick(){
   document.body.classList.add('coaching');
   bubble.hidden=false;reopen.hidden=true;
 
-  const countText=`${state.caseId?'3 分钟体验':'工作区导览'} · ${state.step+1} / ${list.length}`+(state.skipped?`（已跳过 ${state.skipped} 步${state.caseId?'，当前工作单不适用':''}）`:'');
+  const countText=`${state.caseId?'3 分钟体验':'工作区导览'} · ${displayStep} / ${displayTotal}`;
   setText(elCount,countText);
   setText(elTitle,step.title);
 
@@ -743,7 +858,9 @@ function showInvite(caseId){
   if(caseId){
     invite.querySelector('.ci-head b').textContent='要看一遍这张单怎么处理吗';
     invite.querySelector('.ci-head span').textContent='约 2 分钟';
-    invite.querySelector('.ci-body').textContent='从三栏布局讲起，再走一遍提取、核对、核价、批准和导出。';
+    invite.querySelector('.ci-body').textContent=modelEnabled()
+      ?'从三栏布局讲起，再走一遍提取、核对、核价、批准和导出。'
+      :'从三栏布局讲起，再走一遍核对、核价、批准和导出（离线模式自动跳过联网 Agent）。';
   }else{
     invite.querySelector('.ci-head b').textContent='要跟着走一遍吗';
     invite.querySelector('.ci-head span').textContent=HOME_STEPS.length+' 步 · 约 1 分钟';
@@ -799,6 +916,22 @@ window.rfqSpotlight={
       showInvite(caseId);
     }catch{}
   },
+  onCaseSwitch(newCaseId){
+    if(!newCaseId)return;
+    syncAccountState();
+    if(state&&state.caseId!==newCaseId){
+      state=null;save();
+      entered=-1;lastScroll=-1;waitAt=null;mobileExpanded=false;
+      root.hidden=true;pill.hidden=true;pill.dataset.caseId='';
+      document.body.classList.remove('coaching');clearGuideTarget();
+    }else if(pill.dataset.caseId&&pill.dataset.caseId!==newCaseId){
+      pill.hidden=true;pill.dataset.caseId='';
+    }
+    if(!invite.hidden&&invite.dataset.caseId!==newCaseId)invite.hidden=true;
+    if(shownCase&&shownCase!==newCaseId)shownCase='';
+    syncMobileDock();
+    syncListeners();
+  },
   dismiss(){
     invite.hidden=true;
     const desk=document.getElementById('desk');
@@ -821,6 +954,6 @@ window.rfqSpotlight={
     clearGuideTarget();
     syncListeners();
   },
-  _debug:{tick,place,steps,getState:()=>state,root,invite,pill,hole,bubble,STEPS,HOME_STEPS},
+  _debug:{tick,place,steps,effectiveSteps,completedHomeTurns,candHasDispute,hasOverlayOpen,getState:()=>state,root,invite,pill,hole,bubble,STEPS,HOME_STEPS},
 };
 })();
