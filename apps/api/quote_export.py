@@ -102,7 +102,7 @@ def render_quote_xlsx(data):
     warn_font = Font(name='Microsoft YaHei', size=9, bold=True, color='8A5300')
 
     # Title row (Row 1)
-    title_text = '合成演示报价单 · 航材询报价响应' if synthetic else '正式报价响应 · 航材询报价单'
+    title_text = '合成演示报价单 · 询报价响应' if synthetic else '正式报价响应 · 询报价单'
     ws1.merge_cells('A1:K1')
     tcell = ws1['A1']
     tcell.value = _safe_cell(title_text)
@@ -303,7 +303,7 @@ def render_quote_email(data, lang='zh'):
 
     if lang == 'zh':
         prefix = '【合成演示】' if synthetic else ''
-        subject = _clean_inline(f"{prefix}航材报价回复 - {rfq_label}（版本 r{rev}）")
+        subject = _clean_inline(f"{prefix}报价回复 - {rfq_label}（版本 r{rev}）")
         lines = []
         if synthetic:
             lines.append('【合成演示提示】本报价邮件基于合成演示数据生成，仅供流程验证与演示，不构成正式商业报价承诺。')
@@ -334,7 +334,7 @@ def render_quote_email(data, lang='zh'):
         body = '\n'.join(lines)
     else:
         prefix = '[SYNTHETIC DEMO] ' if synthetic else ''
-        subject = _clean_inline(f"{prefix}Aviation Parts Quotation - {rfq_label} (Rev r{rev})")
+        subject = _clean_inline(f"{prefix}Quotation Reply - {rfq_label} (Rev r{rev})")
         lines = []
         if synthetic:
             lines.append('[SYNTHETIC DEMO NOTICE] This quotation email uses synthetic demonstration data only and does not constitute a binding commercial offer.')

@@ -2,7 +2,7 @@
  {
   "sample_id": "mail-01",
   "filename": "inbox-01.eml",
-  "subject": "新询价 两条航材需求",
+  "subject": "新询价 两条物料需求",
   "sender": "synthetic-buyer@example.invalid",
   "classification": "synthetic",
   "preclass": {

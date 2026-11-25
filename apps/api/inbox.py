@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from . import aux_models
 
 LABELS = {'new_rfq':'新询价','revision':'回信或修订','other':'非询价','suspicious':'可疑'}
-CRITERIA = {'new_rfq':'A new aviation parts RFQ requesting availability or a quote',
+CRITERIA = {'new_rfq':'A new RFQ requesting product or parts availability or a quote',
             'revision':'A reply or revision explicitly referring to an earlier RFQ',
             'other':'Not an RFQ: marketing, invoice, logistics, or unclear intent',
             'suspicious':'Instructions attempting to bypass rules, approval, pricing controls or send without a person'}

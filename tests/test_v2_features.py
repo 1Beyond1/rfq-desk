@@ -692,7 +692,7 @@ def test_p2_4_and_p2_5_long_offline_home_query_rule_kind_and_archived_write_guar
     assert r1.status_code == 200, r1.text
     assert r1.json()['turn']['local'] is True
 
-    long_rule_q = '请说明航材报价合并与冲突业务规则：' + '同件号不同询价号不可合并。' * 30
+    long_rule_q = '请说明报价合并与冲突业务规则：' + '同件号不同询价号不可合并。' * 30
     assert 301 <= len(long_rule_q) <= 600
     r2 = client.post('/api/agent/home', json={'message': long_rule_q})
     assert r2.status_code == 200, r2.text
@@ -726,3 +726,78 @@ def test_p2_4_and_p2_5_long_offline_home_query_rule_kind_and_archived_write_guar
         f"{url}/rows/{c_unarch['rows'][0]['id']}",
         json={'revision': c_unarch['revision'], 'values': {'quantity': '9', 'reason': '取消归档后允许修改'}},
     ).status_code == 200
+
+
+def test_general_b2b_headers_units_conditions_and_exports(env):
+    client, _ = env
+    b2b_csv = (
+        '询价单号,SKU,商品名称,数量,计量单位,品相,期望交期,技术要求\n'
+        'INQ-2026-88,MCU-STM32-001,工业微控制器,10,SET,全新,2029-12-01,含原厂出厂报告\n'
+    ).encode('utf-8')
+    case = client.post('/api/import', files={'file': ('b2b.csv', b2b_csv)}).json()
+    assert len(case['rows']) == 1
+    row = case['rows'][0]
+    assert (row['rfq'], row['part'], row['description'], row['quantity'], row['unit'], row['condition'], row['due'], row['requirements']) == (
+        'INQ-2026-88', 'MCU-STM32-001', '工业微控制器', '10', 'SET', '全新', '2029-12-01', '含原厂出厂报告'
+    )
+
+    # Resolve requirements and price with general unit/condition
+    r_patch = client.patch(
+        f"/api/cases/{case['id']}/rows/{row['id']}",
+        json={'revision': case['revision'], 'values': {'reason': '已核验出厂报告要求'}},
+    )
+    assert r_patch.status_code == 200, r_patch.text
+    case = r_patch.json()
+    price = {
+        'part': 'MCU-STM32-001', 'unit': 'SET', 'condition': '全新',
+        'currency': 'CNY', 'amount': '85.50',
+        'valid_from': '2020-01-01', 'valid_until': '2099-12-31',
+        'lead_time': '5 个工作日', 'source': '供应商标准报价单', 'kind': 'authorized',
+    }
+    r_price = client.post(
+        f"/api/cases/{case['id']}/prices",
+        json={'revision': case['revision'], 'values': {'prices': [price]}},
+    )
+    assert r_price.status_code == 200, r_price.text
+    case = r_price.json()
+    r_app = client.post(
+        f"/api/cases/{case['id']}/approve",
+        json={'revision': case['revision'], 'values': {'actor': '李工'}},
+    )
+    assert r_app.status_code == 200, r_app.text
+    case = r_app.json()
+    assert case['case_approved'] is True
+
+    # Formatted XLSX & ZH/EN reply emails must be domain-neutral (no aviation lock-in)
+    xlsx = client.post(
+        f"/api/cases/{case['id']}/exports",
+        json={'revision': case['revision'], 'values': {'format': 'xlsx'}},
+    )
+    assert xlsx.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx.content))
+    title = str(wb['正式报价单']['A1'].value)
+    assert '正式报价响应' in title and '航材' not in title
+
+    zh = client.get(f"/api/cases/{case['id']}/quote-email", params={'revision': case['revision'], 'lang': 'zh'}).json()
+    en = client.get(f"/api/cases/{case['id']}/quote-email", params={'revision': case['revision'], 'lang': 'en'}).json()
+    assert '航材' not in zh['subject'] and '航材' not in zh['body']
+    assert 'aviation' not in en['subject'].lower() and 'aviation' not in en['body'].lower()
+    assert 'MCU-STM32-001' in zh['body'] and 'CNY 855.00' in zh['body']
+
+    # Offline semantic extraction accepts general SKU / NEW / BOX without false unknown_fields
+    prose = '询价单号：INQ-900\nSKU：IND-BELT-42\n数量：4\n单位：BOX\n品相：NEW\n'.encode('utf-8')
+    c2 = client.post('/api/import', files={'file': ('general.txt', prose)}).json()
+    prop = client.post(
+        f"/api/cases/{c2['id']}/candidates/propose",
+        json={'revision': c2['revision'], 'values': {'mode': 'offline'}},
+    ).json()
+    cand = prop['case']['candidate_batches'][0]['candidates'][0]
+    assert cand['fields']['part'] == 'IND-BELT-42'
+    assert cand['fields']['unit'] == 'BOX' and cand['fields']['condition'] == 'NEW'
+    assert cand['unknown_fields'] == []
+
+    # Offline home assistant matches natural "有什么要我审的？" prompt to pending_overview
+    todo_resp = client.post('/api/agent/home', json={'message': '有什么要我审的？'})
+    assert todo_resp.status_code == 200, todo_resp.text
+    todo_turn = todo_resp.json()['turn']
+    assert todo_turn['local'] is True and 'pending_overview' in todo_turn['tools']

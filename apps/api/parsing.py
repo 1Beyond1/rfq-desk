@@ -25,10 +25,14 @@ EML_MAX_ATTACHMENTS = 30
 EML_MAX_BYTES = 25 * 1024 * 1024
 
 ALIASES = {
-    'rfq': ['rfqno', 'rfqnumber', 'rfq', '询价号', '询价单号', '询价编号', '询单号'], 'part': ['partnumber', 'partno', 'partnum', 'part', 'pn', '件号', '零件号', '零件编号', '部件号', '料号', '物料号', 'mpn'],
-    'description': ['description', 'desc', '描述', '品名', '名称', '零件名称'], 'quantity': ['quantity', 'qty', '数量', '需求数量', '询价数量'],
-    'unit': ['unitofmeasure', 'uom', 'um', 'unit', '单位', '计量单位'], 'condition': ['件状条件', '件状', '件况', '件状要求', 'condition', 'cond', 'cd'],
-    'due': ['duedate', '截止日期', '截止时间', '回复期限'], 'requirements': ['询价产品要求', '特殊要求', 'requirements'],
+    'rfq': ['rfqno', 'rfqnumber', 'rfq', 'inquiryno', 'inquirynumber', 'quoteid', '询价号', '询价单号', '询价编号', '询单号', '询价单'],
+    'part': ['partnumber', 'partno', 'partnum', 'part', 'pn', 'sku', 'itemcode', 'itemno', 'productcode', 'model', 'modelno', '件号', '零件号', '零件编号', '部件号', '料号', '物料号', '物料编码', '商品编码', '产品编码', '产品编号', '型号', '规格型号', 'mpn'],
+    'description': ['description', 'desc', 'itemname', 'productname', 'spec', 'specification', '描述', '品名', '名称', '零件名称', '商品名称', '产品名称', '物料名称', '规格'],
+    'quantity': ['quantity', 'qty', '数量', '需求数量', '询价数量'],
+    'unit': ['unitofmeasure', 'uom', 'um', 'unit', '单位', '计量单位'],
+    'condition': ['件状条件', '件状', '件况', '件状要求', '品相', '成色', '新旧程度', '物料状态', '产品状态', '交货状态', 'condition', 'cond', 'cd'],
+    'due': ['duedate', 'deadline', 'requiredby', 'deliverydate', '截止日期', '截止时间', '回复期限', '期望交期', '要求交期'],
+    'requirements': ['询价产品要求', '特殊要求', '技术要求', '规格要求', '产品要求', 'requirements'],
     'priority': ['优先级', 'priority'],
 }
 

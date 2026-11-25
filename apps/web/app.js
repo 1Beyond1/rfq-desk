@@ -195,7 +195,7 @@ function showHome(){
   $('mobileNav').hidden=true;$('srcToggle').hidden=true;$('refreshCase').hidden=true;
   if($('drawerRefreshCase'))$('drawerRefreshCase').hidden=true;
   $('caseEyebrow').textContent='工作区';$('title').textContent='工作区';$('title').removeAttribute('title');$('version').textContent='';notice('');
-  history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 航材询报价工作台';
+  history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 询报价工作台';
   if(window.renderAgentHome)window.renderAgentHome();
   renderCaseLists();run(refreshList);
 }
@@ -208,7 +208,7 @@ function showCases(){
   $('mobileNav').hidden=true;$('srcToggle').hidden=true;$('refreshCase').hidden=true;
   if($('drawerRefreshCase'))$('drawerRefreshCase').hidden=true;
   $('caseEyebrow').textContent='我的工作区';$('title').textContent='我的工作单';$('title').removeAttribute('title');$('version').textContent='';notice('');
-  history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 航材询报价工作台';
+  history.replaceState(null,'',location.pathname+location.search);document.title='RFQ Desk · 询报价工作台';
   renderCaseLists();run(refreshList);
 }
 window.showHome=showHome;

@@ -14,7 +14,7 @@ from .model_usage import UsageLedger, usage_account
 MAX_MESSAGE=12000
 LIMITS={'calls':6,'tools':12,'seconds':80,'output_tokens':1500,'original_chars':6000}
 LABELS={'rfq':'询价号','part':'件号','description':'描述','quantity':'数量','unit':'单位','condition':'件状','due':'截止日期','requirements':'特殊要求','priority':'优先级'}
-PLAIN_UNITS=set('个件只根套台支片块条')|{'EA','EACH','PC','PCS','PIECE','PIECES','UNIT','UNITS','SET','SETS','KIT','KITS'}
+PLAIN_UNITS=set('个件只根套台支片块条箱盒包瓶米卷')|{'EA','EACH','PC','PCS','PIECE','PIECES','UNIT','UNITS','SET','SETS','KIT','KITS','BOX','BOXES','PKG','PACK','KG','G','M','L'}
 # Asking the other side what a unit word means is a question no one should receive. Unknown abbreviations are still asked about.
 plain_unit=lambda value:str(value or '').strip().upper() in PLAIN_UNITS
 RULES=[
@@ -27,7 +27,7 @@ RULES=[
  ('批准 失效 导出','批准绑定当时的版本','批准绑定询价行、价格和澄清状态。之后任一项变化，旧批准失效，要重新批准才能输出。'),
  ('澄清','收到答复不等于解决','答复原件要由人核对并回填字段，字段确实改过才能关闭澄清。'),
 ]
-SYSTEM='''你是航材询报价工作单里的询价助手，目标是帮经办人把这张询价推进到可以报价。
+SYSTEM='''你是询报价工作单里的询价助手，目标是帮经办人把这张询价推进到可以报价。
 
 你能做：读取工作单状态和原文、提取询价候选、查价、解释依据、起草发给对方的澄清邮件。
 你不能做：接纳候选、改字段、录入价格、批准、导出、发送邮件。这些只能由经办人在页面上完成，被要求时明确说做不了，并告诉他去哪里做。
@@ -75,7 +75,7 @@ CASE_TOOL_NAMES={t['function']['name'] for t in TOOLS}-{'pending_overview','list
 HOME_TOOLS=[t for t in TOOLS if t['function']['name'] in HOME_TOOL_NAMES]
 CASE_TOOLS=[t for t in TOOLS if t['function']['name'] in CASE_TOOL_NAMES]
 
-HOME_SYSTEM='''你是航材询报价工作台里的助理，站在工作区首页，不在某一张工作单里。目标是让经办人一眼知道现在有什么要办。
+HOME_SYSTEM='''你是询报价工作台里的助理，站在工作区首页，不在某一张工作单里。目标是让经办人一眼知道现在有什么要办。
 
 你能做：汇总待办、列收件箱邮件摘要、按描述找候选件号、按件号查库存与历史报价与替代件、检索业务规则。
 你不能做：分流邮件、接纳候选、改字段、录价格、批准、导出、发邮件。被要求时说明做不了，并指到对应页面。

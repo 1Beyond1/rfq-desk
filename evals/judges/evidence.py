@@ -80,7 +80,16 @@ def _format_excel_cell(c):
 HEADERS={'rfq':('rfqno','rfq','询价号'),'part':('partnumber','pn','件号','mpn'),'quantity':('quantity','qty','数量'),'unit':('unitofmeasure','uom','unit','单位'),'condition':('condition','件状条件'),'description':('description','描述','品名'),'requirements':('requirements','询价产品要求'),'priority':('priority','优先级'),'due':('duedate','截止日期')}
 HEADERS={**HEADERS,'rfq':HEADERS['rfq']+('rfqnumber','询价单号'),'part':HEADERS['part']+('partno','partnum','零件号','料号'),'quantity':HEADERS['quantity']+('需求数量','询价数量'),'unit':HEADERS['unit']+('um',),'condition':HEADERS['condition']+('cond','cd'),'due':HEADERS['due']+('截止时间','回复期限')}
 # Header names the product also reads; kept here separately so this reader stays independent of the product parser.
-HEADERS={**HEADERS,'rfq':HEADERS['rfq']+('询价编号','询单号'),'part':HEADERS['part']+('part','零件编号','部件号','物料号'),'description':HEADERS['description']+('desc','名称','零件名称'),'unit':HEADERS['unit']+('计量单位',),'condition':HEADERS['condition']+('件状','件况','件状要求'),'requirements':HEADERS['requirements']+('特殊要求',)}
+HEADERS={
+ **HEADERS,
+ 'rfq':HEADERS['rfq']+('inquiryno','inquirynumber','quoteid','询价编号','询单号','询价单'),
+ 'part':HEADERS['part']+('part','sku','itemcode','itemno','productcode','model','modelno','零件编号','部件号','物料号','物料编码','商品编码','产品编码','产品编号','型号','规格型号'),
+ 'description':HEADERS['description']+('desc','itemname','productname','spec','specification','名称','零件名称','商品名称','产品名称','物料名称','规格'),
+ 'unit':HEADERS['unit']+('计量单位',),
+ 'condition':HEADERS['condition']+('件状','件况','件状要求','品相','成色','新旧程度','物料状态','产品状态','交货状态'),
+ 'due':HEADERS['due']+('deadline','requiredby','deliverydate','期望交期','要求交期'),
+ 'requirements':HEADERS['requirements']+('特殊要求','技术要求','规格要求','产品要求'),
+}
 class EvidenceIndex:
  def __init__(self):self.records={};self.units={};self.bindings={}
  def add(self,filename,content,context='',_depth=0,_state=None):

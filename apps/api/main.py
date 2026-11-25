@@ -40,7 +40,7 @@ _DOCS_PATHS = {'/docs', '/docs/oauth2-redirect', '/redoc', '/openapi.json'}
 _VISITOR_SECRET = secrets.token_bytes(32)
 _docs_enabled = not (os.getenv('RFQ_AUTH_REQUIRED') == '1' and os.getenv('RFQ_ENABLE_DOCS') != '1')
 app = FastAPI(
-    title='航材询报价工作台',
+    title='询报价工作台',
     version='0.1.0',
     docs_url='/docs' if _docs_enabled else None,
     redoc_url='/redoc' if _docs_enabled else None,
@@ -1107,7 +1107,7 @@ def agent_home_turns():
 
 
 _PART_CODE_RE = re.compile(r'(?<![A-Za-z0-9])(?:SYN-\d+|EVT-\d+|[A-Z]{2,6}-\d{2,}[A-Z0-9-]*)(?![A-Za-z0-9])', re.I)
-_TODO_QUERY_RE = re.compile(r'待办|要审|要办|审什么|处理什么|总览|汇总|收件箱|邮件|工作单|进度|状态|待批|待核价|未分流')
+_TODO_QUERY_RE = re.compile(r'待办|要.{0,2}(?:审|办|处理|核|批)|审什么|处理什么|总览|汇总|收件箱|邮件|工作单|进度|状态|待批|待核价|未分流')
 _RULE_QUERY_RE = re.compile(r'规则|冲突|合并|有效期|批准|澄清|缩写|重复|改价|核价原则|为什么不能')
 _STOCK_INTENT_RE = re.compile(r'库存|多少|现货|有货|库位|缺口|剩余|数量')
 
@@ -1161,7 +1161,7 @@ def _offline_home_turn(ws, message):
         return res
 
     part = _extract_part_code(msg)
-    is_todo = bool(_TODO_QUERY_RE.search(msg)) and not ('规则' in msg and not re.search(r'待办|收件箱|邮件|要审|要办|总览|汇总', msg))
+    is_todo = bool(_TODO_QUERY_RE.search(msg)) and not ('规则' in msg and not re.search(r'待办|收件箱|邮件|要.{0,2}(?:审|办)|总览|汇总', msg))
     is_rule = bool(_RULE_QUERY_RE.search(msg))
 
     lines = ['【本地确定性查询 · 未调用模型】']

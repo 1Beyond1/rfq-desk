@@ -160,12 +160,14 @@ test('U12, U13, U15 & U19: responsive CSS, 1180 breakpoint, account menu close, 
   assert.match(html,/id="createUsername"[^>]*title="[^"]+"/);
 
   // U19 cache busting
-  assert.match(html,/style\.css\?v=20261125-v2/);
-  assert.match(html,/app\.js\?v=20261125-v2/);
-  assert.match(html,/work\.js\?v=20261125-v2/);
-  assert.match(html,/spotlight\.js\?v=20261125-v2/);
-  assert.match(html,/onsite\.js\?v=20261125-v2/);
-  assert.match(html,/home\.js\?v=20261125-v2/);
+  assert.match(html,/style\.css\?v=20261125-v3/);
+  assert.match(html,/app\.js\?v=20261125-v3/);
+  assert.match(html,/work\.js\?v=20261125-v3/);
+  assert.match(html,/spotlight\.js\?v=20261125-v3/);
+  assert.match(html,/onsite\.js\?v=20261125-v3/);
+  assert.match(html,/home\.js\?v=20261125-v3/);
+  assert.doesNotMatch(html,/航材/);
+  assert.doesNotMatch(readWeb('app.js'),/航材/);
 });
 
 test('U17, U18 & Feature 4C: onsite.js inbox retry, title sync, reference model options collapse & inbox filter/search',async()=>{
