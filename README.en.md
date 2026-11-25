@@ -1,5 +1,9 @@
 # RFQ Desk — Agent-Assisted RFQ & Quoting Workbench
 
+[![CI](https://github.com/1Beyond1/rfq-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/rfq-desk/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22a06b.svg)](LICENSE)
+
 [简体中文](README.md)
 
 An **agent-assisted quoting workbench** for general B2B, industrial, electronics, equipment, and spare-parts Requests for Quotation (RFQs). It transforms incoming inquiry emails (body text, spreadsheets, and text PDFs) into auditable, traceable quotes. The AI agent reads originals, extracts line-level evidence-bound candidates, queries stock/history/pricing, and drafts clarification emails — while **candidate acceptance, pricing, approval, and formal export always remain human-controlled**, with automatic approval invalidation on any subsequent change.
@@ -40,7 +44,7 @@ An **agent-assisted quoting workbench** for general B2B, industrial, electronics
 - **Multi-Format Server-Verified Exports**: Exports audited HTML quotes, CSV, formatted two-sheet **Excel (`.xlsx`)** workbooks (with `@` text locking to preserve leading zeros + provenance sheet + formula-injection neutralization), and deterministic **ZH/EN quote reply email drafts** ready to copy.
 - **Full Offline Loop & Productivity Tools**:
   - Without an external LLM key, the workspace home assistant falls back honestly to local deterministic queries (todos, inbox summaries, part/description stock, historical quotes, alternates, and rules);
-  - Includes status-filtered work-order lists, archive & safe delete, inbox category/keyword search, an inline 3-tab pricing reference panel (stock shortage / historical quotes / alternates), and keyboard shortcuts (`[` `]` / `Alt+S` / `/` / `?`).
+  - Includes a downloadable general B2B RFQ CSV template, audited batch actions (fill missing condition, update expired due dates, deduplicate exact rows), status-filtered work-order lists, archive & safe delete, inbox category/keyword search, an inline 3-tab pricing reference panel (stock shortage / historical quotes / alternates), and keyboard shortcuts (`[` `]` / `Alt+S` / `/` / `?`).
 - **Optional MatrixOne Integration**: SQLite serves as the resilient primary store; connecting MatrixOne adds SQL/vector retrieval, whole-database approval snapshots, candidate data branch diffs, decision auditing, and versioned agent memory.
 - **Account Isolation & Responsive Guided Tour**: Built-in user/admin/guest-demo isolation (`scrypt` password hashing, SHA-256 session tokens, `HttpOnly`/`SameSite=Strict`, Origin/CSRF checks) plus a dynamic-step interactive Spotlight Tour tuned for desktop and mobile (375–390px) viewports.
 
@@ -98,6 +102,12 @@ Runs completely offline with built-in synthetic fixtures — no external API key
 ```
 
 Open [http://127.0.0.1:5311/](http://127.0.0.1:5311/) (API listens on `http://127.0.0.1:8311`).
+
+**Or launch with Docker Compose**
+
+```bash
+docker compose up --build
+```
 
 ### 3. Enable Auth & OpenAI-Compatible LLM (Optional)
 

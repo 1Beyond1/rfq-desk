@@ -2,19 +2,19 @@
 
 本地研究原件仅做只读解析验证，不纳入开源仓库，不提交原文或提取结果；公开演示全部使用 `data/synthetic/` 合成数据。
 
-询价行：rfq 询价号、part 件号、description 描述、quantity 数量、unit 单位、condition 件状、due 截止日期、requirements 特殊要求、priority 原始优先级。标识用字符串；raw_fields 保留提取时原值；sources 保存文件名、SHA-256、HTML 表序/工作表/页/行及完整原始行。手工更正写入事件中的 before/after 和理由，原始行不覆盖。每个字段的出处为对应原始行及标题映射；尚无字符级坐标高亮。
+询价行：rfq 询价号、part 件号/SKU、description 描述、quantity 数量、unit 单位、condition 件状/品相、due 截止日期、requirements 特殊要求、priority 原始优先级。标识用字符串；raw_fields 保留提取时原值；sources 保存文件名、SHA-256、HTML 表序/工作表/页/行及完整原始行。手工更正写入事件中的 before/after 和理由，原始行不覆盖。每个字段的出处为对应原始行及标题映射。
 
-EML：使用 MIME 声明编码，GB2312 按兼容的 GB18030 解码，优先 HTML 表，退回制表文本；递归解析支持格式附件。转发表只要保留规范表头即可读取；非表格式自由文本、复杂嵌套表尚不保证。正文片段保留在工作单中。
+EML：使用 MIME 声明编码，GB2312 按兼容的 GB18030 解码，优先 HTML 表，退回制表文本；递归解析支持格式附件。转发表只要保留规范表头即可读取；非表格式自由文本、复杂嵌套表可借助询价 Agent 或离线标签候选进入人工核对。正文片段保留在工作单中。
 
 XLSX：只读取，不执行公式；公式单元格留空并发出警告。字符串和全零数字格式保留前导零。工作表/行号可追溯；不猜测独立附件没有给出的询价号。
 
-PDF：pdfplumber 文本/表格 + 明确表单语法，支持官方两页 RFQ 表单（6+1 行）、续页沿用文档 RFQ 和 Respond by。Each 原样保留，Condition、List、Cost、Delivery 空栏不当作事实。扫描件报告需 OCR/人工处理；尚无 OCR，其他复杂 PDF 不保证完整。
+PDF：pdfplumber 文本/表格 + 明确表单语法，支持常见多页文本 RFQ 表单；空栏不当作事实。扫描件报告需 OCR/人工处理；尚无 OCR，复杂扫描 PDF 不保证完整提取。
 
 价格依据：part、unit、condition 精确匹配；currency、amount、valid_from、valid_until、lead_time、source、kind 必填。kind 区分 synthetic/manual/authorized；不做单位/币种换算，不把未知缩写释义。没有唯一有效候选阻止批准。金额 Decimal，相乘后 ROUND_HALF_UP；JPY 取整数，其余已支持币种（USD/CNY/EUR/GBP）保留两位。不跨币种汇总。
 
-批准：本地操作人姓名（没有企业身份认证）；批准 token 绑定行内容、裁定和有效价格记录，并绑定批准日期。输出实时检查期限、价格有效性、冲突和 token。无关价表项更新保留批准，相关变化只使关联行失效。每日重新批准是当前保守选择。CSV 标记合成来源并防公式注入；CSV 文件本身不能保证 Excel 自动保留前导零，需作为文本列导入，JSON 导出保存精确字符串。
+批准与导出：批准人绑定当前登录账号（免认证模式为本地操作人姓名）；批准 token 同时锁定行级状态与整单有效行集合、原件快照、核查结论和待审候选状态，并绑定批准日期。输出实时检查期限、价格有效性、冲突和 token。任何影响报价内容的变更都会使旧批准失效并阻止旧版本导出（`409`）。支持 HTML、CSV、格式化双工作表 Excel（`.xlsx`，文本锁定前导零 + 公式注入防护）以及中英文报价回复邮件预览。
 
-数据库：var/rfq.sqlite3，SQLite 写事务与工作版本比较，过期写入返回 409。上传只存 var/uploads；没有跨项目共享数据库。当前本机原型无生产鉴权/多租户，不应直接公开部署。
+数据库与版本快照：默认使用 SQLite（`var/rfq.sqlite3`），配合事务乐观锁与工作版本比较，过期写入返回 `409`；每次导入、修改、价表更新、原件变更、批准和归档均写入本地版本快照，支持字段级 Diff 对比。上传文件存于 `var/uploads`。开启 `RFQ_AUTH_REQUIRED=1` 后启用多账号隔离、`scrypt` 密码哈希、会话令牌摘要、Cookie `HttpOnly`/`SameSite=Strict` 与 CSRF/Origin 校验；可选接入 MatrixOne 提供跨库快照、候选分支与向量检索。
 
 ## 第二轮证据契约
 

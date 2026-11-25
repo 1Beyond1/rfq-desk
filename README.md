@@ -1,5 +1,9 @@
 # 询报价工作台 · RFQ Desk
 
+[![CI](https://github.com/1Beyond1/rfq-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/rfq-desk/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](requirements.txt)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22a06b.svg)](LICENSE)
+
 [English](README.en.md)
 
 面向 B2B、工业品、电子元器件、机电设备与备品备件等通用询报价场景的 **Agent 辅助工作台**。将客户的询价邮件（正文、表格、PDF 附件）转化为可追溯、可审核、可放行的正式报价单：Agent 负责读原文、提取带行级出处的候选、查库存与历史报价、匹配有效价表并起草澄清邮件；**接纳候选、核价、批准和导出始终由人工在工作台内确认**，任何改动都会自动令旧批准失效。
@@ -41,7 +45,7 @@
   - 全部导出均经服务端二次核验与公式注入防护；内置双工作表 `.xlsx` 报价单（文本锁定件号防丢失前导零，附原件与价源溯源表）以及中/英文客户报价回复邮件正文一键复制。
 - **离线全闭环体验与高效工作台**：
   - 未配置外部 LLM 时，首页问答自动走本地确定性路由（明示「本地确定性查询 · 未调用模型」），可查待办、收件箱、库存缺口、历史报价、替代件与规则；
-  - 内置工作单状态看板筛选、软归档与安全删除、收件箱分类搜索、核价页「库存 / 历史价 / 替代件」三联参考面板，以及 `[` `]` / `Alt+S` / `/` / `?` 工作台快捷键。
+  - 内置通用询价表 CSV 模板下载、缺品相/过期行/重复行批量裁定、工作单状态看板筛选、软归档与安全删除、收件箱分类搜索、核价页「库存 / 历史价 / 替代件」三联参考面板，以及 `[` `]` / `Alt+S` / `/` / `?` 工作台快捷键。
 - **可选 MatrixOne 扩展**：SQLite 作为本地主记录源保证断网可用；配置 MatrixOne 后可启用 SQL/向量检索、批准整库快照、候选数据分支差异、决策审计与 Agent 记忆同步。
 - **多账号隔离与自适应引导**：支持普通用户、管理员与免注册隔离体验空间（`scrypt` 密码哈希、SHA-256 落库会话、`HttpOnly`/`SameSite=Strict`、Origin/CSRF 防护），并提供按当前单动态计步、自适应桌面端与 375–390px 手机端的交互式聚光灯引导（Spotlight Tour）。
 
@@ -103,6 +107,12 @@ python3 -m venv .venv
 ```
 
 启动后访问 [http://127.0.0.1:5311/](http://127.0.0.1:5311/)（后端 API 监听 `http://127.0.0.1:8311`）。
+
+**或使用 Docker Compose 一键启动**
+
+```bash
+docker compose up --build
+```
 
 ### 3. 启用账号登录与 AI 模型（可选）
 

@@ -1,0 +1,28 @@
+services:
+  rfq-desk:
+    build: .
+    container_name: rfq-desk
+    ports:
+      - "127.0.0.1:5311:5311"
+      - "127.0.0.1:8311:8311"
+    volumes:
+      - ./var:/app/var
+    environment:
+      RFQ_BIND_HOST: "0.0.0.0"
+      RFQ_DB: "/app/var/rfq.sqlite3"
+      RFQ_AUTH_REQUIRED: "${RFQ_AUTH_REQUIRED:-0}"
+      RFQ_COOKIE_SECURE: "${RFQ_COOKIE_SECURE:-0}"
+      RFQ_PUBLIC_ORIGIN: "${RFQ_PUBLIC_ORIGIN:-http://127.0.0.1:5311}"
+      RFQ_MODEL_URL: "${RFQ_MODEL_URL:-}"
+      RFQ_MODEL_NAME: "${RFQ_MODEL_NAME:-}"
+      RFQ_MODEL_KEY: "${RFQ_MODEL_KEY:-}"
+      RFQ_JEV_KEY: "${RFQ_JEV_KEY:-}"
+      RFQ_REFERENCE_RERANK: "${RFQ_REFERENCE_RERANK:-0}"
+      RFQ_MO_HOST: "${RFQ_MO_HOST:-}"
+      RFQ_MO_PORT: "${RFQ_MO_PORT:-6001}"
+      RFQ_MO_USER: "${RFQ_MO_USER:-}"
+      RFQ_MO_PASSWORD: "${RFQ_MO_PASSWORD:-}"
+      RFQ_MO_DB: "${RFQ_MO_DB:-rfq_desk}"
+    # Uncomment below to enable online LLM / Jev / RAG embedding requests:
+    # command: ["python", "distribution/serve.py", "--model"]
+    restart: unless-stopped
