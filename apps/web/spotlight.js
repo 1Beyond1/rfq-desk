@@ -458,7 +458,7 @@ function place(step){
       return;
     }
     const bw=Math.min(340,W-24),bh=measureHeight(bw);
-    const avoid=qa('.btn-primary,#ahForm,#agentForm').filter(visible).map(e=>e.getBoundingClientRect());
+    const avoid=qa('.btn-primary,#ahForm,#agentForm').filter(e=>visible(e)&&!e.closest('.coach,.coach-invite,.coach-reopen')).map(e=>e.getBoundingClientRect());
     const wideSpots=[[W-bw-18,topBar],[18,topBar],[18,H-bh-18],[W-bw-18,H-bh-18]].map(([x,y])=>clamp(x,y,bw,bh));
     const best=wideSpots.reduce((acc,pos)=>{
       const score=avoid.reduce((s,b)=>s+overlapArea(pos[0],pos[1],bw,bh,b),0);

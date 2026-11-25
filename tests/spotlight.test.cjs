@@ -565,3 +565,32 @@ test('P2-C & P1-A: collapsed case pill hides when leaving case, and case_approve
   assert.equal(env.dbg.invite.hidden,false);
   assert.equal(env.dbg.invite.dataset.caseId,'case-b');
 });
+
+test('wide overview step excludes bubble own .btn-primary so it never oscillates left/right across ticks',()=>{
+  const env=makeSpotlightEnv({
+    mobile:false,deskOpen:true,innerWidth:1280,innerHeight:800,
+    current:{id:'case-osc',revision:1,rows:[],prices:[],progress:{}},
+  });
+  // Make querySelectorAll('.btn-primary,...') return the bubble's own .coach-next button (which tracks bubble left/top!)
+  const origQa=env.ctx.document.querySelectorAll.bind(env.ctx.document);
+  const nextBtn=env.dbg.root.querySelector('.coach-next');
+  nextBtn.closest=sel=>sel.includes('.coach')?env.dbg.root:null;
+  nextBtn.getBoundingClientRect=()=>{
+    const l=parseFloat(env.dbg.bubble.style.left)||0;
+    const t=parseFloat(env.dbg.bubble.style.top)||0;
+    return {left:l+16,top:t+140,right:l+96,bottom:t+172,width:80,height:32};
+  };
+  env.ctx.document.querySelectorAll=sel=>{
+    if(sel.includes('.btn-primary'))return [nextBtn];
+    return origQa(sel);
+  };
+  env.api.start('case-osc',{skipAgent:true});
+  env.dbg.tick();
+  const firstLeft=env.dbg.bubble.style.left;
+  const firstTop=env.dbg.bubble.style.top;
+  for(let i=0;i<5;i++){
+    env.dbg.tick();
+    assert.equal(env.dbg.bubble.style.left,firstLeft,'wide bubble must not oscillate horizontally');
+    assert.equal(env.dbg.bubble.style.top,firstTop,'wide bubble must not oscillate vertically');
+  }
+});
