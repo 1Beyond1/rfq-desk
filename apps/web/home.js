@@ -255,7 +255,7 @@ async function ahAsk(text, opts = {}) {
 function ahOpen(mode) {
   if (mode === 'import') {
     if (typeof authState !== 'undefined' && authState.user?.role === 'demo') {
-      if (typeof notice === 'function') notice('评委体验使用合成材料；导入自己的文件请登录正式账号。');
+      if (typeof notice === 'function') notice('访客体验使用合成材料；导入自有文件请登录正式账号。');
       return;
     }
     showCases();

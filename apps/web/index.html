@@ -17,7 +17,7 @@
       <h1 id="authTitle">登录工作台</h1>
       <p id="authIntro">账号由管理员开通，登录后继续处理你的工作单。</p>
     </div>
-    <div id="judgeEntry" class="judge-entry" hidden><button type="button" class="btn btn-primary btn-judge" id="judgeExperience">✦ 评委体验 · 免账号进入</button><p>系统为你创建独立的合成空间：把一封客户询价邮件交给询价 Agent，跟着聚光灯走完一次报价，约 3–5 分钟。</p><div class="auth-or"><span>或使用账号登录</span></div></div>
+    <div id="judgeEntry" class="judge-entry" hidden><button type="button" class="btn btn-primary btn-judge" id="judgeExperience">✦ 访客体验 · 免账号试用</button><p>系统为你创建独立的合成体验空间：把一封客户询价邮件交给询价 Agent，跟着聚光灯走完一次报价，约 3–5 分钟。</p><div class="auth-or"><span>或使用账号登录</span></div></div>
     <form id="loginForm" hidden>
       <label>账号<input id="loginUsername" name="username" autocomplete="username" required maxlength="40" autocapitalize="none" spellcheck="false"></label>
       <label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
@@ -86,7 +86,7 @@
     <button type="button" class="list-btn" id="lifecycle">报价变更演练</button>
     <button type="button" class="list-btn" id="proseDemo">正文修订候选</button>
     <button type="button" class="list-btn" id="revisionDemo">转发修订候选</button>
-    <details><summary>本地官方素材（仅本机解析）</summary><div id="official"></div></details>
+    <details><summary>本地受保护原件（仅本机解析）</summary><div id="official"></div></details>
   </details>
   <section class="drawer-sec" aria-label="本浏览器裁定草稿">
     <div class="sec-row"><b>本机未保存草稿</b><label class="switch"><input id="localDraftEnabled" type="checkbox">暂存</label></div>
@@ -149,6 +149,7 @@
       <p>导入邮件、附件或表格，解析后进入人工核对。</p>
       <label class="btn file-btn"><span>选择询价文件</span><input id="uploadSide" type="file" accept=".eml,.xlsx,.pdf,.txt,.csv"></label>
       <span class="hint">EML · Excel · CSV · TXT · 文本型 PDF</span>
+      <a class="text-btn" id="rfqTemplateLink" href="templates/rfq-template.csv" download="rfq-template.csv">下载通用询价表模板 (CSV)</a>
     </section>
     <details class="intake-secondary">
       <summary>粘贴邮件正文新建</summary>

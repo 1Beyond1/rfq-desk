@@ -162,7 +162,7 @@ const STEPS=[
     const r=q('#work [data-keep="reason"]');
     if(r&&!r.value){r.value='已对照邮件原文核对';r.dispatchEvent(new Event('input',{bubbles:true}))}
     const a=q('#work [data-keep="actor"]');
-    if(a&&!a.readOnly&&!a.value){a.value='评委体验';a.dispatchEvent(new Event('input',{bubbles:true}))}
+    if(a&&!a.readOnly&&!a.value){a.value='访客体验';a.dispatchEvent(new Event('input',{bubbles:true}))}
     const c=q('#work .checks input[type=checkbox]');
     if(c&&!c.checked)c.click();
   },
@@ -236,7 +236,7 @@ const STEPS=[
   enter:()=>{setFocus('approve','a');ensureMobileView('work')},
   fill:()=>{
     const a=q('#actor');
-    if(a&&!a.readOnly&&!a.value){a.value='评委体验';a.dispatchEvent(new Event('input',{bubbles:true}))}
+    if(a&&!a.readOnly&&!a.value){a.value='访客体验';a.dispatchEvent(new Event('input',{bubbles:true}))}
   },
   target:()=>{
     const btn=q('#approve');

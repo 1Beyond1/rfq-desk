@@ -13,7 +13,7 @@ function renderWork(){
   (views[focus?.type]||viewMissing)();
   restoreKept(w);
   if(authState.user)qsa('[data-keep$="actor"]').forEach(el=>{el.value=authState.user.name+' ('+(authState.user.role==='demo'?'体验账号':authState.user.username)+')';el.readOnly=true;kept.delete(keepKey(el.dataset.keep))});
-  if(authState.user?.role==='demo')qsa('input[type=file]').forEach(el=>{el.disabled=true;const lbl=el.closest('label');if(lbl){lbl.classList.add('is-disabled');lbl.setAttribute('aria-disabled','true');lbl.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')}});
+  if(authState.user?.role==='demo')qsa('input[type=file]').forEach(el=>{el.disabled=true;const lbl=el.closest('label');if(lbl){lbl.classList.add('is-disabled');lbl.setAttribute('aria-disabled','true');lbl.setAttribute('title','访客体验使用合成材料；导入自有文件请登录正式账号')}});
   const scope=current.id+'|'+focusKey()+'|',stale=kept.stale(scope,current).filter(([k])=>!k.endsWith('|p:catalog'));
   if(stale.length){const note=document.createElement('details');note.className='note warn';const summary=document.createElement('summary');summary.textContent='有旧版本未提交填写，保留供对照；确认选项不会自动恢复';note.append(summary);for(const [k,v] of stale){const line=document.createElement('p');line.className='hint';line.textContent=k.split('|').pop()+'：'+(typeof v==='boolean'?'旧确认项，须重新核对':v);note.append(line)}const discard=document.createElement('button');discard.type='button';discard.className='btn btn-sm';discard.textContent='放弃这些旧版填写';discard.onclick=()=>{for(const [k] of stale)kept.delete(k);renderWork()};note.append(discard);w.querySelector('.w-body')?.prepend(note)}
   qsa('[data-refresh-case]').forEach(b=>b.onclick=()=>run(()=>openCase(current.id)));
@@ -409,7 +409,7 @@ function viewQuestion(){
     ${step(2,closed||q.replies.length?'done':'info','发出澄清（由你在系统外发送）',`<p class="hint">草稿汇总本单全部待答问题；下载不改变状态。</p><div class="btn-row"><button type="button" class="btn btn-sm" id="dlDraft">下载澄清草稿 TXT</button><button type="button" class="btn btn-sm btn-ghost" id="pvDraft">预览</button></div>`)}
     ${step(3,s3,'登记答复原件',`${replyBlocks.length?`<ul class="replies">${replyBlocks.map(({reply,old})=>`<li><b>${esc(reply.filename)}</b> <span class="chip ${old?'tone-off':reply.applications.length?'tone-ok':'tone-warn'}">${old?'旧版本，仅保留记录':esc(RfqUiState.replyLabel(reply))}</span><small class="hint"> 针对行版本 ${reply.row_revision} · ${esc(reply.received_at)} · ${esc(reply.actor)}：${esc(reply.reason)}</small>${(reply.reviews||[]).length?`<details><summary>审阅记录</summary>${reply.reviews.map(r=>`<p class="hint">${esc(r.time)} · ${esc(r.actor)} · ${esc(RfqUiState.replyLabel({review_status:r.status}))}：${esc(r.reason)}</p>`).join('')}</details>`:''}</li>`).join('')}</ul>`:''}
       ${closed?'':`<div class="sub-card"><p class="hint">先把答复文件追加到本工作单，再登记为本问题的答复。登记只记录收到，不改字段、不解决。</p>
-        ${isDemo?'<p class="note warn" id="replyDemoHint">评委体验使用合成材料；追加和登记答复原件请登录正式账号。</p>':''}
+        ${isDemo?'<p class="note warn" id="replyDemoHint">访客体验使用合成材料；追加和登记答复原件请登录正式账号。</p>':''}
         <div class="btn-row"><label class="btn btn-sm file-btn"><span>追加答复原件</span><input type="file" accept=".txt,.eml,.pdf" id="replyUpload"></label></div>
         <div class="fields two"><label>答复原件<select data-keep="r:file" id="replyFile" ${unlinked.length&&!isDemo?'':'disabled'}>${unlinked.length?unlinked.map(f=>`<option value="${esc(f)}">${esc(f)}</option>`).join(''):'<option value="">请先在上方追加答复原件</option>'}</select></label><label>答复针对行版本<input data-keep="r:rev" type="number" min="1" step="1" value="${row?.revision||q.start_row_revision}"></label><label>核对人<input data-keep="r:actor"></label><label>依据<input data-keep="r:reason" placeholder="核对了文件名、询价号、件号与行版本"></label></div>
         ${!unlinked.length&&!isDemo?'<p class="hint" id="replyEmptyHint">请先在上方追加答复原件（初始导入的询价原件不能登记为澄清答复）。</p>':''}
@@ -420,7 +420,7 @@ function viewQuestion(){
   $('dlDraft').onclick=()=>run(downloadDraft);$('pvDraft').onclick=()=>run(previewDraft);
   if($('replyUpload'))$('replyUpload').onchange=e=>run(async()=>{const name=e.target.files[0]?.name;await appendOriginal(e.target);if(name&&focus?.id===q.id){kept.set(keepKey('r:file'),name);await refreshMaterials(current);renderWork()}});
   if($('saveReply'))$('saveReply').onclick=()=>run(async()=>{
-    if(authState.user?.role==='demo')throw Error('评委体验使用合成材料；登记答复原件请登录正式账号。');
+    if(authState.user?.role==='demo')throw Error('访客体验使用合成材料；登记答复原件请登录正式账号。');
     const snap=snapshotKept(W()),val=k=>W().querySelector(`[data-keep="${k}"]`).value,done=busyButton($('saveReply'),'登记中…');$('replyError').textContent='';
     try{if(await change(`clarifications/${q.id}/replies`,{filename:val('r:file'),reply_row_revision:Number(val('r:rev')),actor:val('r:actor'),reason:val('r:reason')},'答复已登记，尚未回填或解决；请核对答复。'))releaseKept(snap)}
     catch(e){if($('replyError'))$('replyError').textContent=e.message;else throw e}finally{done()}
@@ -977,7 +977,7 @@ async function agentOpen(c,message,consent){
   return agentSend(message,{caseId:c.id,consent:Boolean(consent)});
 }
 $('landAgent').onsubmit=e=>{e.preventDefault();run(async()=>{
-  if(authState.user?.role==='demo')throw Error('评委体验使用合成材料；粘贴新建工作单请登录正式账号。');
+  if(authState.user?.role==='demo')throw Error('访客体验使用合成材料；粘贴新建工作单请登录正式账号。');
   const text=$('agentMail').value.trim();
   if(!text)throw Error('请先贴一封询价邮件');
   const ok=await RfqDialog.confirm({title:'把粘贴的邮件发送给模型服务',body:'将把你粘贴的邮件正文保存为工作单原件，并发送给模型服务提取与分析。请勿发送不能外传的真实材料。',ok:'同意并发送'});

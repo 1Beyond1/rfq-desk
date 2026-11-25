@@ -235,7 +235,7 @@ class Accounts:
                 raise HTTPException(429,'当前体验人数较多，请稍后再试')
             c.execute('INSERT INTO auth_attempts VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET count=count+1',(bucket,now))
             # An unusable password: this account can only be reached through its own random session.
-            c.execute('INSERT INTO auth_users VALUES(?,?,?,?,?,?,?,?)',(user_id,'demo.'+user_id,'评委体验','!session-only','demo',1,0,now))
+            c.execute('INSERT INTO auth_users VALUES(?,?,?,?,?,?,?,?)',(user_id,'demo.'+user_id,'访客体验','!session-only','demo',1,0,now))
             c.execute('INSERT INTO auth_sessions VALUES(?,?,?,?,?)',(digest(raw),user_id,csrf,now+3600,now))
             self.audit(c,user_id,'demo_start',user_id)
             return raw,{**public_user(c.execute('SELECT * FROM auth_users WHERE id=?',(user_id,)).fetchone()),'csrf':csrf}
@@ -364,9 +364,9 @@ def router(store):
 
     @routes.post('/auth/demo')
     def demo(request: Request, response: Response):
-        if not enabled():raise HTTPException(404,'本环境未开启评委体验')
+        if not enabled():raise HTTPException(404,'本环境未开启访客体验')
         check_origin(request)
-        if request.headers.get('content-type','').split(';')[0]!='application/json':raise HTTPException(415,'请从登录页进入评委体验')
+        if request.headers.get('content-type','').split(';')[0]!='application/json':raise HTTPException(415,'请从登录页进入访客体验')
         existing=USER.get()
         if existing:
             if existing['role']!='demo':raise HTTPException(409,'请先退出当前账号，再进入独立体验空间')

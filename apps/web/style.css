@@ -276,7 +276,7 @@ body:not([data-auth=ready]){display:block!important;height:auto!important;overfl
 .btn-primary:hover:not(:disabled){background:var(--accent-2);border-color:var(--accent-2)}
 .card{border-radius:var(--r2)}
 
-/* 登录：评委入口在前，是主操作 */
+/* 登录：访客体验入口在前，是主操作 */
 .btn-judge{width:100%;min-height:48px;font-size:16px;font-weight:600;border-radius:12px;background:var(--accent-grad);border:0;box-shadow:0 8px 22px rgba(91,75,219,.28)}
 .judge-entry p{color:var(--muted);font-size:13px;line-height:1.6;margin:10px 0 0}
 .auth-or{display:flex;align-items:center;gap:10px;margin:18px 0 6px;color:var(--faint);font-size:12px}

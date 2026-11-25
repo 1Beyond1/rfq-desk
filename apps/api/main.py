@@ -156,7 +156,7 @@ async def visitor_scope(request: Request, call_next):
                 if found and not owns(found.group(1), VISITOR.get()): raise HTTPException(404, '找不到工作单')
                 if user['role']=='demo' and request.method not in ('GET','HEAD','OPTIONS'):
                     if path in ('/api/import','/api/agent/start') or path.endswith('/materials') or '/prices/import/' in path or '/clarifications/' in path and path.endswith('/replies'):
-                        raise HTTPException(403,'评委体验只使用独立合成材料；导入自己的文件请登录正式账号')
+                        raise HTTPException(403,'访客体验仅使用独立合成材料；导入自有文件请登录正式账号')
             response = await call_next(request)
         except HTTPException as e:
             response = JSONResponse({'detail':e.detail}, status_code=e.status_code)
@@ -701,12 +701,16 @@ def edit_rows(id:str,change:Change):
         ids=values.get('row_ids')
         if not isinstance(ids,list) or not ids or len(ids)!=len(set(ids)) or not all(isinstance(x,str) for x in ids):raise ValueError('请选择不同的询价行')
         if len(ids)>MAX_BULK_ROWS:raise ValueError(f'单次批量修改上限为{MAX_BULK_ROWS}行')
-        changes={k:v for k,v in values.items() if k in ('due','excluded','reason','actor')}
-        if not ('due' in changes or 'excluded' in changes):raise ValueError('请选择要批量修改的字段')
+        changes={k:v for k,v in values.items() if k in ('due','condition','excluded','reason','actor')}
+        if not ('due' in changes or 'condition' in changes or 'excluded' in changes):raise ValueError('请选择要批量修改的字段')
         if 'due' in changes:
             try: valid=isinstance(changes['due'],str) and date.fromisoformat(changes['due']).isoformat()==changes['due']
             except (TypeError,ValueError): valid=False
             if not valid:raise ValueError('统一截止日期须为有效的 YYYY-MM-DD')
+        if 'condition' in changes:
+            if not isinstance(changes['condition'],str) or not changes['condition'].strip() or len(changes['condition'].strip())>80:
+                raise ValueError('统一品相/件状须为 1–80 字非空文本')
+            changes['condition']=changes['condition'].strip()
         for row_id in ids:apply_row_edit(case,row_id,changes,mark_resolution=False)
     return mutate(id,change,edit)
 

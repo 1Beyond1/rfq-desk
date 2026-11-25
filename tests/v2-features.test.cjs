@@ -454,4 +454,12 @@ test('V2 Red-Team convergence: snapKindNames, triple-ref currency/qty sanitizati
   assert.match(css,/\.ah-avatar\{[^}]*flex:none/);
   assert.match(css,/\.diff-panel \.diff-controls\{grid-template-columns:minmax\(0,1fr\)\}/);
   assert.match(css,/\.case-row-acts \.btn\{min-height:36px\}/);
+
+  // General-purpose polish: batch condition UI, RFQ CSV template link, and zero competition wording
+  const html=readWeb('index.html');
+  assert.match(html,/id="rfqTemplateLink"[^>]*href="templates\/rfq-template\.csv"/);
+  assert.match(appSrc,/id="batchCondition"/);
+  for(const f of ['index.html','app.js','work.js','home.js','spotlight.js','onsite.js','accounts.js']){
+    assert.doesNotMatch(readWeb(f),/评委/,`${f} should not contain competition-specific 评委 wording`);
+  }
 });

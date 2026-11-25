@@ -364,12 +364,13 @@ function renderQueue(){
   if(queueMode==='rows')return renderRowList();
   const {groups}=buildQueue(current),isFocus=i=>focus&&focus.type===i.type&&focus.id===i.id;
   const expiredIds=current.rows.filter(r=>!r.excluded&&r.issue_codes.some(i=>i.code==='expired_due')).map(r=>r.id);
+  const missingCondIds=current.rows.filter(r=>!r.excluded&&!String(r.condition||'').trim()).map(r=>r.id);
   const seen=new Set(),duplicateIds=[];
   for(const r of current.rows.filter(r=>!r.excluded)){
     const key=JSON.stringify(Object.keys(fieldNames).map(f=>r[f]));
     if(seen.has(key))duplicateIds.push(r.id);else seen.add(key);
   }
-  const batchTools=(expiredIds.length?`<button type="button" class="btn btn-sm" id="batchDue">统一修改已过期行的截止日期</button>`:'')+(duplicateIds.length?`<button type="button" class="btn btn-sm" id="batchDuplicates">每组完全重复只保留首行</button>`:'');
+  const batchTools=(expiredIds.length?`<button type="button" class="btn btn-sm" id="batchDue">统一修改已过期行的截止日期</button>`:'')+(missingCondIds.length?`<button type="button" class="btn btn-sm" id="batchCondition">统一补充缺品相/件状行 (${missingCondIds.length})</button>`:'')+(duplicateIds.length?`<button type="button" class="btn btn-sm" id="batchDuplicates">每组完全重复只保留首行</button>`:'');
   $('queue').innerHTML=(batchTools?`<div class="row-tools">${batchTools}</div>`:'')+groups.filter(g=>g.items.length).map(g=>`<section class="q-group${g.done?' done':''}" data-group="${g.key}"><h3><span>${g.title}</span><small>${g.items.length}</small></h3>${g.items.map(i=>`<button type="button" class="q-item tone-${i.tone}${isFocus(i)?' current':''}" data-qtype="${i.type}" data-qid="${esc(i.id)}"><b class="${i.mono?'mono':''}">${esc(i.title)}</b><small>${esc(i.sub)}</small></button>`).join('')}</section>`).join('');
   if(expiredIds.length)$('batchDue').onclick=()=>run(async()=>{
     const btn=$('batchDue'),ids=expiredIds,ctx=interaction.capture(current);
@@ -389,6 +390,26 @@ function renderQueue(){
     }catch(e){
       if(interaction.active(ctx,current))throw e;
       activity(ctx,'批量修改截止日期失败：'+e.message,true);
+    }finally{interaction.finish(task);done()}
+  });
+  if(missingCondIds.length)$('batchCondition').onclick=()=>run(async()=>{
+    const btn=$('batchCondition'),ids=missingCondIds,ctx=interaction.capture(current);
+    const answer=await RfqDialog.ask({title:'统一补充品相 / 件状',body:`将为 ${ids.length} 行缺少品相/件状的询价行填入统一状态码（如 NEW、STD、全新、FN 等），并记录人工裁定理由。`,ok:'保存裁定',fields:[
+      {name:'condition',label:'统一品相 / 件状',placeholder:'如 NEW / STD / 全新 / FN',maxlength:80,required:true,missing:'请填写统一品相或件状'},
+      {name:'reason',label:'统一裁定理由',type:'textarea',maxlength:500,required:true,missing:'请填写统一裁定理由'}
+    ]});
+    if(!answer)return;
+    if(!interaction.active(ctx,current)){activity(ctx,'页面已切换，未发送旧操作',true);return}
+    const task=interaction.begin(ctx,'batch-condition'),done=typeof busyButton==='function'?busyButton(btn,'保存中…'):()=>{};
+    try{
+      const c=await request(`/cases/${ctx.caseId}/rows`,{
+        method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({revision:ctx.revision,values:{row_ids:ids,condition:answer.condition.trim(),reason:answer.reason}})
+      });
+      applyResponse(c,ctx,`已统一补充 ${ids.length} 行的品相/件状。`);
+    }catch(e){
+      if(interaction.active(ctx,current))throw e;
+      activity(ctx,'批量补充品相/件状失败：'+e.message,true);
     }finally{interaction.finish(task);done()}
   });
   if(duplicateIds.length)$('batchDuplicates').onclick=()=>run(async()=>{
@@ -696,23 +717,23 @@ async function refreshModelState(){
   $('tourStart').textContent=enabled?'开始引导体验':'开始离线引导体验';
   $('agentMailSend').disabled=!enabled||isDemo;
   if($('agentMail'))$('agentMail').disabled=isDemo;
-  $('mailServiceHint').textContent=isDemo?'评委体验使用合成材料；粘贴新建工作单请登录正式账号。':enabled?'提取结果由你确认后，再进入正式询价。':'当前为离线模式，请先使用“导入询价文件”。';
+  $('mailServiceHint').textContent=isDemo?'访客体验使用合成材料；粘贴新建工作单请登录正式账号。':enabled?'提取结果由你确认后，再进入正式询价。':'当前为离线模式，请先使用“导入询价文件”。';
   document.querySelectorAll('[data-agent-sample]').forEach(b=>b.disabled=!enabled);
   if(isDemo){
     document.querySelectorAll('input[type=file]').forEach(el=>{
       el.disabled=true;
       const lbl=el.closest('label');
-      if(lbl){lbl.classList.add('is-disabled');lbl.setAttribute('aria-disabled','true');lbl.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')}
+      if(lbl){lbl.classList.add('is-disabled');lbl.setAttribute('aria-disabled','true');lbl.setAttribute('title','访客体验使用合成材料；导入自有文件请登录正式账号')}
     });
     const ahImp=document.querySelector('[data-ah-go="import"]');
-    if(ahImp){ahImp.classList.add('is-demo-disabled');ahImp.setAttribute('aria-disabled','true');ahImp.setAttribute('title','评委体验使用合成材料；导入自己的文件请登录正式账号')}
+    if(ahImp){ahImp.classList.add('is-demo-disabled');ahImp.setAttribute('aria-disabled','true');ahImp.setAttribute('title','访客体验使用合成材料；导入自有文件请登录正式账号')}
   }
 }
 document.addEventListener('click',e=>{
   const lbl=e.target.closest?.('.file-btn.is-disabled');
   if(lbl&&authState.user?.role==='demo'){
     e.preventDefault();
-    notice('评委体验使用合成材料；导入自己的文件请登录正式账号。');
+    notice('访客体验使用合成材料；导入自有文件请登录正式账号。');
   }
 });
 async function boot(){
@@ -725,6 +746,6 @@ async function boot(){
   const hashed=location.hash.slice(1);
   if(/^[a-zA-Z0-9_-]{1,64}$/.test(hashed)&&caseList.some(c=>c.id===hashed))await openCase(hashed);
   else showHome();
-  try{const list=await request('/official');$('official').closest('details').hidden=!list.length;$('official').innerHTML=list.length?list.map((p,i)=>`<button type="button" class="list-btn" data-official="${i}">${esc(p)}</button>`).join(''):'<p class="hint">未发现本地官方素材。</p>';document.querySelectorAll('[data-official]').forEach(b=>b.onclick=()=>run(()=>importCase('/official/'+b.dataset.official,{method:'POST'},'官方素材仅本地解析；未发送至模型。')))}catch{$('official').innerHTML='<p class="hint">本地官方素材列表读取失败。</p>'}
+  try{const list=await request('/official');$('official').closest('details').hidden=!list.length;$('official').innerHTML=list.length?list.map((p,i)=>`<button type="button" class="list-btn" data-official="${i}">${esc(p)}</button>`).join(''):'<p class="hint">未发现本地受保护原件。</p>';document.querySelectorAll('[data-official]').forEach(b=>b.onclick=()=>run(()=>importCase('/official/'+b.dataset.official,{method:'POST'},'受保护原件仅本地解析；未发送至模型。')))}catch{$('official').innerHTML='<p class="hint">本地受保护原件列表读取失败。</p>'}
 }
 renderLocalDraftStatus();

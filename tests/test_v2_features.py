@@ -801,3 +801,47 @@ def test_general_b2b_headers_units_conditions_and_exports(env):
     assert todo_resp.status_code == 200, todo_resp.text
     todo_turn = todo_resp.json()['turn']
     assert todo_turn['local'] is True and 'pending_overview' in todo_turn['tools']
+
+
+def test_batch_condition_and_rfq_csv_template_import(env):
+    client, _ = env
+    # 1. Shipped general B2B CSV template imports cleanly with zero missing fields
+    tpl = (ROOT / 'apps/web/templates/rfq-template.csv').read_bytes()
+    imported = client.post('/api/import', files={'file': ('rfq-template.csv', tpl)})
+    assert imported.status_code == 200, imported.text
+    c_tpl = imported.json()
+    assert len(c_tpl['rows']) == 2
+    assert {r['part'] for r in c_tpl['rows']} == {'SKU-VALVE-001', 'SKU-SENSOR-02'}
+    assert all(r['condition'] in ('NEW', 'STD') for r in c_tpl['rows'])
+
+    # 2. General CSV without a condition column can batch-fill condition via PATCH /rows with audit trail
+    no_cond_csv = (
+        '询价单号,SKU,商品名称,数量,单位\n'
+        'INQ-2026-50,PART-A1,开关电源,4,EA\n'
+        'INQ-2026-50,PART-B2,导轨端子,20,PCS\n'
+    ).encode('utf-8')
+    c = client.post('/api/import', files={'file': ('no-cond.csv', no_cond_csv)}).json()
+    assert len(c['rows']) == 2
+    assert all(any(i['code'] == 'missing_field' and i.get('field') == 'condition' for i in r['issue_codes']) for r in c['rows'])
+    row_ids = [r['id'] for r in c['rows']]
+
+    # Empty or overly long condition must be rejected with 422
+    assert client.patch(
+        f"/api/cases/{c['id']}/rows",
+        json={'revision': c['revision'], 'values': {'row_ids': row_ids, 'condition': '   ', 'reason': '测试空值'}},
+    ).status_code == 422
+    assert client.patch(
+        f"/api/cases/{c['id']}/rows",
+        json={'revision': c['revision'], 'values': {'row_ids': row_ids, 'condition': 'X' * 81, 'reason': '测试超长'}},
+    ).status_code == 422
+
+    # Valid batch condition fills all selected rows and clears missing_field(condition)
+    resp = client.patch(
+        f"/api/cases/{c['id']}/rows",
+        json={'revision': c['revision'], 'values': {'row_ids': row_ids, 'condition': 'NEW', 'reason': '客户确认为全新标准件'}},
+    )
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert all(r['condition'] == 'NEW' for r in updated['rows'])
+    assert all(not any(i.get('field') == 'condition' for i in r['issue_codes']) for r in updated['rows'])
+    assert len(updated.get('human_decisions', [])) == 2
