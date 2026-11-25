@@ -144,6 +144,7 @@ def test_pure_preview_explicit_export_and_legacy_audit_preserve_approval_version
 def test_start_script_does_not_require_git_or_ownership():
     shell=shutil.which('pwsh') or shutil.which('powershell')
     if not shell:pytest.skip('PowerShell not available on this host')
+    if not (ROOT/'.venv/Scripts/python.exe').is_file():pytest.skip('Local .venv/Scripts/python.exe unavailable in this checkout')
     script=str(ROOT/'scripts/start.ps1').replace("'","''")
     result=subprocess.run([shell,'-NoProfile','-Command',f"function git {{ throw 'Git must not be invoked' }}; & '{script}' api -CheckOnly"],capture_output=True,text=True,timeout=20)
     assert result.returncode==0 and 'Git not required' in result.stdout,result.stderr

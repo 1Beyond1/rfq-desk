@@ -181,7 +181,7 @@ def resolve(case, item_id, values):
     if values.get('method')=='superseded':
         row=next((r for r in case['rows'] if r['id']==q['row_id']),None)
         if row is None or values.get('base_row_revision')!=row['revision']:raise ValueError('目标行不存在或版本已变化')
-        if (row['rfq'],row['part'])==(q['rfq'],q['part']):raise ValueError('目标归属未变化，不能结束未解决问题')
+        if not any(row[f]!=q[f] for f in ('rfq','part') if f!=q['field']):raise ValueError('目标归属未变化，不能结束未解决问题')
         if row['revision']<=q['start_row_revision']:raise ValueError('缺少重新归属的正式裁定')
         q['supersession']={'time':now(),'row_revision':row['revision'],'actor':values['actor'],'reason':values['reason'],'projection':projection(row,q['field'])}
         # The old target is retired explicitly; any current field problem remains independently blocking.

@@ -1,4 +1,5 @@
 """Credential-free, persistent call accounting. Unknown usage is never zero."""
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 import os,json,time,sqlite3,uuid,hashlib
@@ -31,13 +32,19 @@ class UsageLedger:
         competitive=self.run in ('competitive-validation-20261028-1','goal-readiness-20261029-1')
         limit=5000 if self.daily else 60 if self.run=='goal-readiness-20261029-1' and self.batch=='02' else 40 if competitive else 8
         if not 1<=self.max_calls<=limit or not 1000<=self.max_tokens<=(20000000 if self.daily else 500000 if competitive else 160000) or not 60<=self.max_seconds<=(86400 if self.daily else 7200):raise ValueError('模型本地任务配额配置无效')
+    @contextmanager
     def connect(self):
         self.path.parent.mkdir(parents=True,exist_ok=True)
         c=sqlite3.connect(self.path,timeout=10)
-        c.execute('CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, run TEXT, started REAL, finished REAL, reserved INTEGER, charge INTEGER, observed INTEGER, status TEXT, model TEXT, input_hash TEXT, raw_usage TEXT, metadata TEXT)')
-        c.execute('CREATE TABLE IF NOT EXISTS batch_audits (run TEXT, batch TEXT, calls_before INTEGER, authorized_at REAL, first_started REAL, note TEXT, PRIMARY KEY(run,batch))')
-        c.execute('CREATE TABLE IF NOT EXISTS window_audits (run TEXT, window TEXT, calls_before INTEGER, authorized_at REAL, first_started REAL, note TEXT, PRIMARY KEY(run,window))')
-        return c
+        try:
+            c.execute('PRAGMA busy_timeout=10000')
+            c.execute('CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, run TEXT, started REAL, finished REAL, reserved INTEGER, charge INTEGER, observed INTEGER, status TEXT, model TEXT, input_hash TEXT, raw_usage TEXT, metadata TEXT)')
+            c.execute('CREATE TABLE IF NOT EXISTS batch_audits (run TEXT, batch TEXT, calls_before INTEGER, authorized_at REAL, first_started REAL, note TEXT, PRIMARY KEY(run,batch))')
+            c.execute('CREATE TABLE IF NOT EXISTS window_audits (run TEXT, window TEXT, calls_before INTEGER, authorized_at REAL, first_started REAL, note TEXT, PRIMARY KEY(run,window))')
+            with c:
+                yield c
+        finally:
+            c.close()
     def reserve(self,materials,model,cap):
         if self.stop.exists():raise ValueError('模型任务已终止；未发出请求')
         with self.connect() as c:

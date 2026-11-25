@@ -5,8 +5,8 @@ import asyncio,json,re,time
 
 import httpx
 
-from . import clarifications
-from .domain import FIELDS, analyze, number
+from . import accounts, clarifications
+from .domain import FIELDS, analyze, is_case_approved, number
 from .materials import read_materials
 from .model_router import ROUTER
 from .model_usage import UsageLedger, usage_account
@@ -70,6 +70,11 @@ TOOLS=[
  fn('list_mails','列出收件箱邮件摘要：主题、发件人、分类、是否需要人工。不返回正文。',{'category':TEXT,'limit':TEXT}),
 ]
 
+HOME_TOOL_NAMES={'pending_overview','list_mails','search_rules','lookup_stock','search_parts','historical_quotes','find_alternatives'}
+CASE_TOOL_NAMES={t['function']['name'] for t in TOOLS}-{'pending_overview','list_mails'}
+HOME_TOOLS=[t for t in TOOLS if t['function']['name'] in HOME_TOOL_NAMES]
+CASE_TOOLS=[t for t in TOOLS if t['function']['name'] in CASE_TOOL_NAMES]
+
 HOME_SYSTEM='''你是航材询报价工作台里的助理，站在工作区首页，不在某一张工作单里。目标是让经办人一眼知道现在有什么要办。
 
 你能做：汇总待办、列收件箱邮件摘要、按描述找候选件号、按件号查库存与历史报价与替代件、检索业务规则。
@@ -106,7 +111,8 @@ def next_step(case,rows=None):
     if any(i['code']=='open_clarification' for r in active for i in r['issue_codes']):return '处理未决澄清'
     unpriced=sum(any(i['code'] in ('missing_price','ambiguous_price') for i in r['issue_codes']) for r in active)
     if unpriced:return f'给 {unpriced} 行补价格依据'
-    return '批准当前版本' if not all(r['approved'] for r in active) else '输出报价响应'
+    approved_ok=is_case_approved(case,rows) if 'case_approval' in case else all(r['approved'] for r in active)
+    return '批准当前版本' if not approved_ok else '输出报价响应'
 
 def get_case_state(case):
     rows=analyze(case)
@@ -219,7 +225,8 @@ class ModelSession:
     Every attempt goes through the usage ledger; unknown usage is never counted as zero."""
     def __init__(self,routes,transport=None):
         self.routes=routes if isinstance(routes,list) else [routes];self.transport=transport;self.tokens=0;self.requests=0;self.models=[];self.switches=0
-    async def call(self,messages,final,deadline):
+    async def call(self,messages,final,deadline,tools=None):
+        active_tools=CASE_TOOLS if tools is None else tools
         ledger=UsageLedger() if self.transport is None else None
         order=ROUTER.order(self.routes);failure='模型服务暂时不可用'
         # With a single service, a busy answer is retried once on it.
@@ -227,9 +234,10 @@ class ModelSession:
         for n,s in enumerate(order):
             left=deadline-time.monotonic()
             if left<=1:raise ModelUnavailable('模型响应超时')
+            accounts.reserve_current_demo_call()
             # Thinking tokens count against the output cap, so a thinking model gets more room per call.
             cap=LIMITS['output_tokens']*(8/3 if s.reasoning_effort else 1)
-            body={'model':s.model,'messages':messages,'tools':TOOLS,'temperature':0,'max_tokens':int(cap),**s.thinking,**({'tool_choice':'none'} if final else {})}
+            body={'model':s.model,'messages':messages,'tools':active_tools,'temperature':0,'max_tokens':int(cap),**s.thinking,**({'tool_choice':'none'} if final else {})}
             try:rid=ledger.reserve({'agent':len(messages)},s.model,int(cap)*3) if ledger else None
             except ValueError as e:raise ModelUnavailable(str(e))
             raw=None;status='transport_failed';meta={};started=time.monotonic()
@@ -302,10 +310,16 @@ async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_
     if not isinstance(message,str) or not message.strip():raise ValueError('请输入内容')
     if len(message)>MAX_MESSAGE:raise ValueError('内容过长，请分段发送')
     began=time.monotonic();deadline=began+(seconds or LIMITS['seconds']);used=[];steps=[];draft=None;tool_calls=0;extracted=None;reference_results=[];mail_results=[]
+    if hasattr(ws,'tools'):active_tools=ws.tools
+    elif getattr(ws,'system',None)==HOME_SYSTEM or (hasattr(ws,'overview') and hasattr(ws,'mails')):active_tools=HOME_TOOLS
+    else:active_tools=CASE_TOOLS
     async def execute(name,args):
         nonlocal draft,extracted
-        if name=='pending_overview':return ws.overview()
+        if name=='pending_overview':
+            if not hasattr(ws,'overview'):return {'error':'当前对话不支持待办总览'}
+            return ws.overview()
         if name=='list_mails':
+            if not hasattr(ws,'mails'):return {'error':'当前对话不支持列出收件箱邮件'}
             result=ws.mails(str(args.get('category') or ''),str(args.get('limit') or '8'))
             mail_results[:]=result.get('mails',[])[:20]
             return result
@@ -316,20 +330,29 @@ async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_
             reference_results.append({'tool':name,'query':args,'result':result})
             return result
         if name=='search_rules':return search_rules(args.get('query',''))
+        if name not in ('get_case_state','read_original','check_prices','explain_row','version_history','draft_clarification','add_mail_to_case','extract_candidates'):
+            return {'error':'没有这个工具'}
+        if not hasattr(ws,'case'):return {'error':'当前对话不在工作单内，不支持此工具'}
         case=ws.case()
         if name=='get_case_state':return get_case_state(case)
-        if name=='read_original':return read_original(ws.content(case))
+        if name=='read_original':
+            if not hasattr(ws,'content'):return {'error':'当前对话不支持读取原件'}
+            return read_original(ws.content(case))
         if name=='check_prices':return check_prices(case,str(args.get('part','')),str(args.get('unit','')),str(args.get('condition','')),str(args.get('quantity','')))
         if name=='explain_row':return explain_row(case,str(args.get('row_id','')))
-        if name=='version_history':return ws.history()
+        if name=='version_history':
+            if not hasattr(ws,'history'):return {'error':'当前对话不支持版本历史查询'}
+            return ws.history()
         if name=='draft_clarification':
             result=draft_clarification(case);draft=result.get('draft') or draft
             return result
         if name=='add_mail_to_case':
+            if not hasattr(ws,'add_mail'):return {'error':'当前对话不支持加入邮件原件'}
             if not can_add_mail:return {'error':'这封邮件已经是本工作单的原件'}
             added=ws.add_mail(message)
             return {'added':added}
         if name=='extract_candidates':
+            if not hasattr(ws,'extract'):return {'error':'当前对话不支持候选提取'}
             if pending_candidates(case):result={'already_pending':True}
             else:result=await ws.extract();case=ws.case()
             summary=candidate_summary(case)
@@ -345,7 +368,11 @@ async def run_turn(ws,message,earlier,session,can_add_mail=True,seconds=None,on_
         return {'reply':reply,'draft':draft,'tools':used,'steps':steps,'references':reference_results[:12],'mails':mail_results,'seconds':round(time.monotonic()-began,1),'degraded':degraded,'next_step':_safe_next(ws),'tokens':session.tokens,'requests':session.requests,'models':getattr(session,'models',[]),'switches':getattr(session,'switches',0)}
     try:
         for round_ in range(LIMITS['calls']):
-            answer=await session.call(messages,round_==LIMITS['calls']-1,deadline)
+            if isinstance(session,ModelSession):
+                answer=await session.call(messages,round_==LIMITS['calls']-1,deadline,tools=active_tools)
+            else:
+                accounts.reserve_current_demo_call()
+                answer=await session.call(messages,round_==LIMITS['calls']-1,deadline)
             messages.append(answer)
             if not answer.get('tool_calls'):
                 if not answer['content'].strip():raise ModelUnavailable('模型没有给出回复')

@@ -107,8 +107,8 @@ class References:
                     cur.execute('SELECT body FROM rfq_reference_records WHERE dataset=%s AND kind=%s'+(' AND part_no=%s' if part else '')+' ORDER BY id', (self.digest,kind,*([part] if part else [])))
                     rows = [json.loads(r[0]) if isinstance(r[0],str) else r[0] for r in cur.fetchall()]
                 return rows,'MatrixOne SQL',warnings
-            except Exception as e:
-                MO_STATUS.update(connected=False,error=type(e).__name__)
+            except Exception:
+                MO_STATUS.update(connected=False,error='unavailable')
                 warnings.append('MatrixOne本次查询不可用，使用本地副本')
         with self.connection() as c:
             rows = c.execute('SELECT body FROM records WHERE dataset=? AND kind=?'+(' AND part_no=?' if part else '')+' ORDER BY id',(self.digest,kind,*([part] if part else []))).fetchall()

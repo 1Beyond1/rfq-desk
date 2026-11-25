@@ -1,19 +1,93 @@
 """Independent raw reader: does not import product parsing/domain code."""
 from email import policy
 from email.parser import BytesParser
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
-import hashlib,re,csv
-from io import StringIO
+import csv,hashlib,math,re,zipfile,zlib
 from bs4 import BeautifulSoup
 import openpyxl,pdfplumber
+
+_XLSX_MAX_ENTRIES=200
+_XLSX_MAX_UNCOMPRESSED=30*1024*1024
+_XLSX_MAX_SHEETS=30
+_XLSX_MAX_ROWS=5000
+_XLSX_MAX_COLS=100
+_PDF_MAX_PAGES=100
+_EML_MAX_DEPTH=3
+_EML_MAX_ATTACHMENTS=30
+_EML_MAX_BYTES=25*1024*1024
+
+def _decode_text(data):
+ if b'\x00' in data:raise ValueError('文本文件包含非法二进制字节')
+ for enc in ('utf-8-sig','gb18030'):
+  try:return data.decode(enc)
+  except UnicodeDecodeError:continue
+ raise ValueError('文本编码无法识别')
+
+def _decode_part(part):
+ raw=part.get_payload(decode=True) or b''
+ enc=(part.get_content_charset() or 'utf-8').strip()
+ if enc.lower() in ('gb2312','gbk'):enc='gb18030'
+ for candidate in (enc,'utf-8','gb18030'):
+  try:return raw.decode(candidate)
+  except (UnicodeError,LookupError):continue
+ return raw.decode('utf-8',errors='replace')
+
+def _extract_part_bytes(part):
+ raw=part.get_payload(decode=True)
+ if raw is not None:return raw
+ payload=part.get_payload()
+ if isinstance(payload,list) and payload:
+  return b'\n'.join(p.as_bytes() if hasattr(p,'as_bytes') else str(p).encode('utf-8') for p in payload)
+ if hasattr(payload,'as_bytes'):return payload.as_bytes()
+ if isinstance(payload,str):return payload.encode('utf-8')
+ return part.as_bytes()
+
+def _validate_xlsx(data):
+ try:zf=zipfile.ZipFile(BytesIO(data))
+ except (zipfile.BadZipFile,OSError) as e:raise ValueError('XLSX文件格式无效') from e
+ with zf:
+  infos=zf.infolist()
+  if len(infos)>_XLSX_MAX_ENTRIES:raise ValueError('XLSX压缩包条目过多')
+  total=0
+  for info in infos:
+   if info.file_size>_XLSX_MAX_UNCOMPRESSED or total+info.file_size>_XLSX_MAX_UNCOMPRESSED:
+    raise ValueError('XLSX解压体积超限')
+   is_xml=info.filename.lower().endswith(('.xml','.rels'))
+   tail=b''
+   try:
+    with zf.open(info,'r') as entry:
+     while True:
+      chunk=entry.read(65536)
+      if not chunk:break
+      total+=len(chunk)
+      if total>_XLSX_MAX_UNCOMPRESSED:raise ValueError('XLSX解压体积超限')
+      if is_xml:
+       buf=(tail+chunk).upper()
+       flat=buf.replace(b'\x00',b'')
+       if b'<!DOCTYPE' in buf or b'<!ENTITY' in buf or b'<!DOCTYPE' in flat or b'<!ENTITY' in flat:raise ValueError('XLSX包含禁止的XML实体声明')
+       tail=chunk[-32:]
+   except (zipfile.BadZipFile,zlib.error,RuntimeError,OSError) as e:raise ValueError('XLSX压缩内容损坏') from e
+
+def _format_excel_cell(c):
+ if c.data_type=='f':return ''
+ v=c.value
+ if isinstance(v,float) and math.isfinite(v) and v.is_integer():v=int(v)
+ fmt=(c.number_format or '').split(';',1)[0].strip()
+ if isinstance(v,int) and not isinstance(v,bool) and re.fullmatch('0+',fmt):return str(v).zfill(len(fmt))
+ return v
+
 HEADERS={'rfq':('rfqno','rfq','询价号'),'part':('partnumber','pn','件号','mpn'),'quantity':('quantity','qty','数量'),'unit':('unitofmeasure','uom','unit','单位'),'condition':('condition','件状条件'),'description':('description','描述','品名'),'requirements':('requirements','询价产品要求'),'priority':('priority','优先级'),'due':('duedate','截止日期')}
 HEADERS={**HEADERS,'rfq':HEADERS['rfq']+('rfqnumber','询价单号'),'part':HEADERS['part']+('partno','partnum','零件号','料号'),'quantity':HEADERS['quantity']+('需求数量','询价数量'),'unit':HEADERS['unit']+('um',),'condition':HEADERS['condition']+('cond','cd'),'due':HEADERS['due']+('截止时间','回复期限')}
 # Header names the product also reads; kept here separately so this reader stays independent of the product parser.
 HEADERS={**HEADERS,'rfq':HEADERS['rfq']+('询价编号','询单号'),'part':HEADERS['part']+('part','零件编号','部件号','物料号'),'description':HEADERS['description']+('desc','名称','零件名称'),'unit':HEADERS['unit']+('计量单位',),'condition':HEADERS['condition']+('件状','件况','件状要求'),'requirements':HEADERS['requirements']+('特殊要求',)}
 class EvidenceIndex:
  def __init__(self):self.records={};self.units={};self.bindings={}
- def add(self,filename,content,context=''):
+ def add(self,filename,content,context='',_depth=0,_state=None):
+  if not isinstance(content,(bytes,bytearray)):raise ValueError('文件内容无效')
+  content=bytes(content)
+  if _depth>_EML_MAX_DEPTH:raise ValueError('EML嵌套深度超限')
+  if _state is None:_state={'attachments':0,'bytes':len(content)}
   digest=hashlib.sha256(content).hexdigest();m=re.search(r'RFQ[- _]?\d+',context+' '+filename,re.I);fallback=m.group(0) if m else ''
   def record(loc,fields,raw):self.records[(digest,loc)]={'file':filename,'sha256':digest,'location':loc,'fields':fields,'raw':raw}
   def table(values,prefix):
@@ -39,45 +113,56 @@ class EvidenceIndex:
   if suffix=='.eml':
    msg=BytesParser(policy=policy.default).parsebytes(content);body=msg.get_body(preferencelist=('html','plain'))
    if body:
-    enc=body.get_content_charset() or 'utf-8'
-    if enc.lower() in ('gb2312','gbk'):enc='gb18030'
-    text=(body.get_payload(decode=True) or b'').decode(enc,errors='strict');soup=BeautifulSoup(text,'html.parser');tables=soup.find_all('table')
+    if len(body.get_payload(decode=True) or b'')>_EML_MAX_BYTES:raise ValueError('EML正文解码大小超限')
+    text=_decode_part(body);soup=BeautifulSoup(text,'html.parser');tables=soup.find_all('table')
     for i,t in enumerate(tables,1):table([[c.get_text(' ',strip=True) for c in tr.find_all(['td','th'])] for tr in t.find_all('tr')],f'MIME HTML table {i}')
     if not tables:table([line.split('\t') for line in text.splitlines()],'MIME text')
    preferred=msg.get_body(preferencelist=('plain','html'))
    if preferred:
-    encoding=preferred.get_content_charset() or 'utf-8'
-    if encoding.lower() in ('gb2312','gbk'):encoding='gb18030'
-    rawtext=(preferred.get_payload(decode=True) or b'').decode(encoding,errors='strict')
+    if len(preferred.get_payload(decode=True) or b'')>_EML_MAX_BYTES:raise ValueError('EML正文解码大小超限')
+    rawtext=_decode_part(preferred)
     if preferred.get_content_type()=='text/html':rawtext=BeautifulSoup(rawtext,'html.parser').get_text('\n',strip=True)
     span_lines(rawtext,'MIME body')
    for i,part in enumerate(msg.iter_attachments(),1):
+    _state['attachments']+=1
+    if _state['attachments']>_EML_MAX_ATTACHMENTS:raise ValueError('EML附件数量超限')
     name=part.get_filename() or f'attachment-{i}'
-    if Path(name).suffix.lower() in ('.eml','.xlsx','.pdf','.csv'):self.add(filename+' > '+name,part.get_payload(decode=True),str(msg['Subject']))
-  elif suffix=='.txt':span_lines(content.decode('utf-8-sig'),'text')
+    att_bytes=_extract_part_bytes(part)
+    _state['bytes']+=len(att_bytes)
+    if _state['bytes']>_EML_MAX_BYTES:raise ValueError('EML解码后总大小超限')
+    if Path(name).suffix.lower() in ('.eml','.xlsx','.pdf','.csv','.txt'):self.add(filename+' > '+name,att_bytes,str(msg['Subject'] or ''),_depth+1,_state)
+  elif suffix=='.txt':span_lines(_decode_text(content),'text')
   elif suffix=='.csv':
-   try:text=content.decode('utf-8-sig')
-   except UnicodeDecodeError:text=content.decode('gb18030')
+   text=_decode_text(content)
    table(csv.reader(StringIO(text,newline='')),'CSV')
   elif suffix=='.xlsx':
-   for sheet in openpyxl.load_workbook(BytesIO(content),data_only=False):
-    values=[]
-    for row in sheet:
-     cells=[]
-     for c in row:
-      v='' if c.data_type=='f' else c.value
-      if isinstance(v,int) and re.fullmatch('0+',c.number_format or ''):v=str(v).zfill(len(c.number_format))
-      cells.append(v)
-     values.append(cells)
-    table(values,'sheet '+sheet.title)
+   _validate_xlsx(content)
+   book=openpyxl.load_workbook(BytesIO(content),read_only=True,data_only=True)
+   try:
+    if len(book.sheetnames)>_XLSX_MAX_SHEETS:raise ValueError('XLSX工作表数量超限')
+    for sheet in book.worksheets:
+     sheet.reset_dimensions()
+     values=[]
+     for r_idx,row in enumerate(sheet.iter_rows(),1):
+      if r_idx>_XLSX_MAX_ROWS:raise ValueError('XLSX单表行数超限')
+      if len(row)>_XLSX_MAX_COLS:raise ValueError('XLSX单表列数超限')
+      values.append([_format_excel_cell(c) for c in row])
+     table(values,'sheet '+sheet.title)
+   finally:
+    book.close()
   elif suffix=='.pdf':
    with pdfplumber.open(BytesIO(content)) as pdf:
-    whole='\n'.join(p.extract_text() or '' for p in pdf.pages);rfq=re.search(r'RFQ[- _]?\d+',whole,re.I);deadline=re.search(r'Respond by:\s*(\d{2}-[A-Za-z]{3}-\d{4})',whole)
+    if len(pdf.pages)>_PDF_MAX_PAGES:raise ValueError('PDF页数超限')
+    page_texts=[p.extract_text() or '' for p in pdf.pages]
+    whole='\n'.join(page_texts);rfq=re.search(r'RFQ[- _]?\d+',whole,re.I);deadline=re.search(r'Respond by:\s*(\d{2}-[A-Za-z]{3}-\d{4})',whole)
     from datetime import datetime
-    due=datetime.strptime(deadline.group(1),'%d-%b-%Y').date().isoformat() if deadline else ''
-    for i,page in enumerate(pdf.pages,1):
-     span_lines(page.extract_text() or '',f'page {i}')
-     lines=(page.extract_text() or '').splitlines()
+    due=''
+    if deadline:
+     try:due=datetime.strptime(deadline.group(1),'%d-%b-%Y').date().isoformat()
+     except ValueError:due=''
+    for i,text in enumerate(page_texts,1):
+     span_lines(text,f'page {i}')
+     lines=text.splitlines()
      for n,line in enumerate(lines,1):
       m=re.fullmatch(r'(\d{4})\s+(\S+)\s+(\d+(?:\.\d+)?)\s+(Each|EA|IN|FT)\s*',line)
       if m:

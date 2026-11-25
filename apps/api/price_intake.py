@@ -3,17 +3,33 @@ import csv,io,json,hashlib,uuid
 from pathlib import Path
 from openpyxl import load_workbook
 from .domain import price_validate,fingerprint
+from .parsing import XLSX_MAX_COLS, validate_xlsx
 COLUMNS=('part','unit','condition','currency','amount','valid_from','valid_until','lead_time','source','kind')
 
 def parse_prices(name,data):
  suffix=Path(name).suffix.lower();errors=[];rows=[]
  if suffix=='.csv':
-  table=list(csv.reader(io.StringIO(data.decode('utf-8-sig'))));sheet='CSV'
+  if b'\x00' in data:raise ValueError('CSV文件包含非法二进制字节')
+  reader=csv.reader(io.StringIO(data.decode('utf-8-sig')))
+  table=[]
+  for idx,row in enumerate(reader):
+   table.append(row)
+   if idx+1>=1002:break
+  sheet='CSV'
  elif suffix=='.xlsx':
+  validate_xlsx(data)
   try:book=load_workbook(io.BytesIO(data),data_only=False,read_only=True)
   except Exception:raise ValueError('XLSX文件无法读取，请使用规范文本单元格模板')
-  if len(book.sheetnames)!=1:raise ValueError('模板只允许一个工作表')
-  ws=book.active;table=list(ws.values);sheet=ws.title
+  try:
+   if len(book.sheetnames)!=1:raise ValueError('模板只允许一个工作表')
+   ws=book.active;ws.reset_dimensions();sheet=ws.title
+   table=[]
+   for idx,row in enumerate(ws.iter_rows(values_only=True)):
+    if len(row)>XLSX_MAX_COLS:raise ValueError('XLSX列数超限')
+    table.append(row)
+    if idx+1>=1002:break
+  finally:
+   book.close()
  else:raise ValueError('仅支持规范CSV或XLSX模板')
  if not table or tuple(table[0])!=COLUMNS:raise ValueError('列名和顺序须与规范模板完全一致')
  if len(table)>1001:raise ValueError('价目最多1000行')

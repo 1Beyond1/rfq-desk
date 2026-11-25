@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import accounts
 from .model_config import ModelSettings
 from .model_usage import UsageLedger
 
@@ -20,6 +21,7 @@ def genesis_base():
 
 
 def request(url, key, body, *, timeout=12, transport=None):
+    accounts.reserve_current_demo_call()
     ledger = UsageLedger() if transport is None else None
     rid = ledger.reserve({'auxiliary':body}, body.get('model','unknown'), 8000) if ledger else None
     usage = None

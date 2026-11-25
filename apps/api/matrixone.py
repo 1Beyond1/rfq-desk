@@ -5,9 +5,23 @@ turn, a database snapshot at each approval, and a data branch holding each batch
 unreachable, work continues and the report says so.
 """
 from datetime import datetime, timezone
-import json, os, re
+import json, logging, os, re
 
 import pymysql
+
+logger = logging.getLogger(__name__)
+SNAPSHOT_RE = re.compile(r'rfq_[0-9a-f]+_r\d+_\d{14}')
+BRANCH_RE = re.compile(r'cand_[0-9a-f]+')
+
+def validate_snapshot_name(snapshot):
+    if not isinstance(snapshot, str) or not SNAPSHOT_RE.fullmatch(snapshot):
+        raise ValueError('无效的 MatrixOne 快照名称')
+    return snapshot
+
+def validate_branch_name(branch):
+    if not isinstance(branch, str) or not BRANCH_RE.fullmatch(branch):
+        raise ValueError('无效的 MatrixOne 分支名称')
+    return branch
 
 LINE_FIELDS = ('rfq', 'part', 'description', 'quantity', 'unit', 'condition', 'due', 'requirements', 'priority')
 COLUMNS = {'condition': 'cond'}  # condition is reserved in SQL
@@ -60,8 +74,9 @@ def guarded(action):
         finally: link[0].close()
         status.update(connected=True, error=None)
         return result
-    except Exception as e:
-        status.update(connected=False, error=f'{type(e).__name__}: {str(e)[:200]}')
+    except Exception:
+        logger.warning('MatrixOne mirror operation failed', exc_info=True)
+        status.update(connected=False, error='MatrixOne 同步服务暂时不可用')
         return None
 
 
@@ -91,7 +106,7 @@ def sync(case, rows):
 
 def snapshot_approval(case, actor):
     """An approval is a database snapshot: the lines, decisions and agent memory exactly as they were approved."""
-    name = f"rfq_{case['id']}_r{case['revision']}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    name = validate_snapshot_name(f"rfq_{case['id']}_r{case['revision']}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
     def run(c, db):
         with c.cursor() as cur:
             cur.execute(f'CREATE SNAPSHOT {name} FOR DATABASE {db}')
@@ -102,7 +117,7 @@ def snapshot_approval(case, actor):
 
 def branch_candidates(case, batch):
     """Model candidates go on a data branch of the lines, so the diff against the formal lines shows exactly what they would add."""
-    name = f"cand_{batch['id']}"
+    name = validate_branch_name(f"cand_{batch['id']}")
     def run(c, db):
         with c.cursor() as cur:
             cur.execute(f'DATA BRANCH CREATE TABLE {db}.{name} FROM {db}.rfq_lines')
@@ -126,6 +141,8 @@ def remember_turn(case_id, seq, case_revision, turn):
 
 def rows_at(cur, case_id, snapshot=None):
     cols = ','.join(['row_id', *[COLUMNS.get(f, f) for f in LINE_FIELDS], 'excluded', 'price_amount', 'price_currency'])
+    if snapshot is not None:
+        validate_snapshot_name(snapshot)
     at = f" {{SNAPSHOT='{snapshot}'}}" if snapshot else ''
     cur.execute(f'SELECT {cols} FROM rfq_lines{at} WHERE case_id=%s', (case_id,))
     names = ['row_id', *LINE_FIELDS, 'excluded', 'price_amount', 'price_currency']
@@ -153,7 +170,7 @@ def report(case_id):
             snaps = [dict(zip(('name', 'case_revision', 'price_version', 'actor', 'at'), r)) for r in cur.fetchall()]
             since = None
             if snaps:
-                last = snaps[-1]['name']
+                last = validate_snapshot_name(snaps[-1]['name'])
                 since = {'snapshot': last, 'changes': compare(rows_at(cur, case_id, last), rows_at(cur, case_id))}
                 cur.execute(f"SELECT COUNT(*) FROM rfq_agent_memory {{SNAPSHOT='{last}'}} WHERE case_id=%s", (case_id,))
                 since['memory_at_approval'] = cur.fetchone()[0]

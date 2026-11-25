@@ -44,9 +44,9 @@ if __name__=='__main__':
         finally:probe.close()
     import uvicorn
     from apps.api import main
-    from scripts.serve_web import Handler
+    from scripts.serve_web import Handler, WebServer
     assert Path(main.__file__).resolve().is_relative_to(ROOT)
-    server=ThreadingHTTPServer((HOST,5311),partial(Handler,directory=str(ROOT/'apps/web')))
+    server=WebServer((HOST,5311),partial(Handler,directory=str(ROOT/'apps/web')))
     thread=threading.Thread(target=server.serve_forever,daemon=True)
     (ROOT/'var').mkdir(exist_ok=True)
     info={'pid':os.getpid(),'root':str(ROOT),'api_source':str(Path(main.__file__).resolve()),

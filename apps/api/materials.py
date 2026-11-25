@@ -2,11 +2,16 @@
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
-import csv,hashlib,io,json,re
+import csv,hashlib,io,json
 import openpyxl
 from bs4 import BeautifulSoup
 import pdfplumber
 from io import BytesIO
+from .parsing import (
+    EML_MAX_ATTACHMENTS, EML_MAX_BYTES, EML_MAX_DEPTH, PDF_MAX_PAGES,
+    XLSX_MAX_COLS, XLSX_MAX_ROWS, XLSX_MAX_SHEETS,
+    decode, decode_text, extract_part_bytes, format_excel_cell, validate_xlsx,
+)
 
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 def material_file(name,data):
@@ -22,40 +27,60 @@ def material_file(name,data):
     if suffix=='.eml':
         msg=BytesParser(policy=policy.default).parsebytes(data);body=msg.get_body(preferencelist=('plain','html'))
         if body:
-            enc=body.get_content_charset() or 'utf-8'
-            if enc.lower() in ('gb2312','gbk'):enc='gb18030'
-            text=(body.get_payload(decode=True) or b'').decode(enc,errors='strict')
+            body_raw=body.get_payload(decode=True) or b''
+            if len(body_raw)>EML_MAX_BYTES:raise ValueError('EML正文解码大小超限（上限25MB）')
+            text=decode(body)
             if body.get_content_type()=='text/html':text=BeautifulSoup(text,'html.parser').get_text('\n',strip=True)
             lines(text,'MIME body')
-    elif suffix=='.txt':lines(data.decode('utf-8-sig'),'text')
+    elif suffix=='.txt':lines(decode_text(data),'text')
     elif suffix=='.pdf':
         with pdfplumber.open(BytesIO(data)) as pdf:
+            if len(pdf.pages)>PDF_MAX_PAGES:raise ValueError(f'PDF页数超限（上限{PDF_MAX_PAGES}页）')
             for i,page in enumerate(pdf.pages,1):lines(page.extract_text() or '',f'page {i}')
     # Table rows keep the parser's location names, so a row cited here is the same row the table parser reports.
     elif suffix=='.csv':
-        try:text=data.decode('utf-8-sig')
-        except UnicodeDecodeError:text=data.decode('gb18030')
+        text=decode_text(data)
         rows(csv.reader(io.StringIO(text,newline='')),'CSV')
     elif suffix=='.xlsx':
-        for sheet in openpyxl.load_workbook(BytesIO(data),data_only=False):
-            rows(([table_value(c) for c in row] for row in sheet),f'sheet {sheet.title}')
+        validate_xlsx(data)
+        book=openpyxl.load_workbook(BytesIO(data),read_only=True,data_only=True)
+        try:
+            if len(book.sheetnames)>XLSX_MAX_SHEETS:raise ValueError(f'XLSX工作表数量超限（上限{XLSX_MAX_SHEETS}个）')
+            for sheet in book.worksheets:
+                sheet.reset_dimensions()
+                records=[]
+                for r_idx,row in enumerate(sheet.iter_rows(),1):
+                    if r_idx>XLSX_MAX_ROWS:raise ValueError(f'XLSX单表行数超限（上限{XLSX_MAX_ROWS}行）')
+                    if len(row)>XLSX_MAX_COLS:raise ValueError(f'XLSX单表列数超限（上限{XLSX_MAX_COLS}列）')
+                    records.append([table_value(c) for c in row])
+                rows(records,f'sheet {sheet.title}')
+        finally:
+            book.close()
     return {'file':name,'sha256':sha,'units':units,'supported':suffix in ('.eml','.txt','.pdf','.csv','.xlsx')}
 
 def table_value(cell):
-    if cell.data_type=='f':return ''
-    if isinstance(cell.value,int) and re.fullmatch(r'0+',cell.number_format or ''):return str(cell.value).zfill(len(cell.number_format))
-    return cell.value
+    return format_excel_cell(cell)
 
-def material_files(name,data):
+def material_files(name,data,_depth=0,_state=None):
     """The file and, for a mail, its attachments as files of their own: a model reading the mail must also see its Excel and PDF."""
+    if _depth>EML_MAX_DEPTH:raise ValueError(f'EML嵌套深度超限（最多{EML_MAX_DEPTH}层）')
+    if _state is None:_state={'attachments':0,'bytes':len(data)}
     out=[material_file(name,data)]
     if Path(name).suffix.lower()=='.eml':
         msg=BytesParser(policy=policy.default).parsebytes(data)
         for i,part in enumerate(msg.iter_attachments(),1):
+            _state['attachments']+=1
+            if _state['attachments']>EML_MAX_ATTACHMENTS:raise ValueError(f'EML附件数量超限（上限{EML_MAX_ATTACHMENTS}个）')
             filename=part.get_filename() or f'attachment-{i}'
-            if Path(filename).suffix.lower() in ('.xlsx','.pdf','.csv','.txt'):
-                try:out.append({**material_file(name+' > '+filename,part.get_payload(decode=True) or b''),'container_file':name})
-                except Exception:continue
+            raw=extract_part_bytes(part)
+            _state['bytes']+=len(raw)
+            if _state['bytes']>EML_MAX_BYTES:raise ValueError('EML解码后总大小超限（上限25MB）')
+            suffix=Path(filename).suffix.lower()
+            if suffix=='.eml':
+                for item in material_files(name+' > '+filename,raw,_depth+1,_state):
+                    out.append({**item,'container_file':name})
+            elif suffix in ('.xlsx','.pdf','.csv','.txt'):
+                out.append({**material_file(name+' > '+filename,raw),'container_file':name})
     return out
 
 def read_materials(folder, include_source_rows=False):

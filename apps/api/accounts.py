@@ -1,9 +1,12 @@
 """Local accounts and revocable, server-side sessions. No default credentials."""
 from contextvars import ContextVar
+from datetime import date
+from pathlib import Path
 import hashlib
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import threading
 import time
@@ -15,12 +18,31 @@ USER = ContextVar('rfq_account', default=None)
 COOKIE = 'rfq_session'
 SESSION_TTL = 8 * 3600
 IDLE_TTL = 30 * 60
+_ACTIVE_ACCOUNTS = None
 
 
 def demo_ai_calls():
     """AI operations per judge space; the daily model ledger still caps the whole site."""
     return max(1, min(int(os.getenv('RFQ_DEMO_AI_CALLS', '20')), 100))
-HASH_SLOTS = threading.BoundedSemaphore(2)
+
+
+def demo_ip_limit():
+    """Max demo spaces created per IP within a 15-minute window."""
+    return max(1, min(int(os.getenv('RFQ_DEMO_IP_LIMIT', '6')), 100))
+
+
+def demo_daily_calls():
+    """Site-wide daily AI call cap reserved for demo spaces so they cannot starve formal users."""
+    return max(1, min(int(os.getenv('RFQ_DEMO_DAILY_CALLS', '60')), 5000))
+
+
+def reserve_current_demo_call():
+    """Charge one actual model/auxiliary request against the current demo user and daily demo cap."""
+    if _ACTIVE_ACCOUNTS is not None:
+        _ACTIVE_ACCOUNTS.reserve_demo_call()
+
+
+HASH_SLOTS = threading.BoundedSemaphore(6)
 
 
 def enabled():
@@ -69,8 +91,11 @@ def public_user(row):
 
 
 class Accounts:
-    def __init__(self, connection):
+    def __init__(self, connection, upload_root=None):
+        global _ACTIVE_ACCOUNTS
         self.connection = connection
+        self.upload_root = upload_root
+        _ACTIVE_ACCOUNTS = self
 
     def schema(self, c):
         c.row_factory = sqlite3.Row
@@ -79,6 +104,7 @@ class Accounts:
         c.execute('CREATE TABLE IF NOT EXISTS auth_attempts (bucket TEXT PRIMARY KEY, since INTEGER NOT NULL, count INTEGER NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS auth_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, subject TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS auth_demo_calls (user_id TEXT PRIMARY KEY, count INTEGER NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS auth_demo_daily (day TEXT PRIMARY KEY, count INTEGER NOT NULL)')
 
     def audit(self, c, actor, action, subject):
         c.execute('INSERT INTO auth_events(at,actor,action,subject) VALUES(?,?,?,?)', (int(time.time()), actor, action, subject))
@@ -150,16 +176,58 @@ class Accounts:
             self.schema(c)
             c.execute('DELETE FROM auth_sessions WHERE token=?', (digest(raw),))
 
+    def cleanup_expired_demos(self, now=None):
+        """Reclaim expired/logged-out demo accounts, their DB rows, and uploaded case folders."""
+        now = int(time.time()) if now is None else int(now)
+        removed_cases = []
+        with self.connection() as c:
+            self.schema(c); c.execute('BEGIN IMMEDIATE')
+            expired = [
+                r[0] for r in c.execute(
+                    "SELECT u.id FROM auth_users u WHERE u.role='demo' AND NOT EXISTS ("
+                    "SELECT 1 FROM auth_sessions s WHERE s.user_id=u.id AND s.expires>? AND s.seen>?)",
+                    (now, now - IDLE_TTL),
+                ).fetchall()
+            ]
+            if not expired:
+                return 0
+            tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            for uid in expired:
+                visitor = 'user:' + uid
+                case_ids = [r[0] for r in c.execute('SELECT case_id FROM case_owners WHERE visitor=?', (visitor,)).fetchall()] if 'case_owners' in tables else []
+                for cid in case_ids:
+                    if 'cases' in tables: c.execute('DELETE FROM cases WHERE id=?', (cid,))
+                    if 'case_owners' in tables: c.execute('DELETE FROM case_owners WHERE case_id=?', (cid,))
+                    if 'agent_turns' in tables: c.execute('DELETE FROM agent_turns WHERE case_id=?', (cid,))
+                    removed_cases.append(cid)
+                if 'inbox_messages' in tables: c.execute('DELETE FROM inbox_messages WHERE owner=?', (visitor,))
+                if 'agent_home_turns' in tables: c.execute('DELETE FROM agent_home_turns WHERE owner=?', (visitor,))
+                c.execute('DELETE FROM auth_sessions WHERE user_id=?', (uid,))
+                c.execute('DELETE FROM auth_demo_calls WHERE user_id=?', (uid,))
+                c.execute('DELETE FROM auth_users WHERE id=?', (uid,))
+        root = self.upload_root() if callable(self.upload_root) else self.upload_root
+        if root is not None:
+            upload_base = Path(root).resolve()
+            for cid in removed_cases:
+                if isinstance(cid, str) and cid and Path(cid).name == cid and cid not in ('.', '..'):
+                    target = (upload_base / cid).resolve()
+                    if target.parent == upload_base and target.exists():
+                        shutil.rmtree(target, ignore_errors=True)
+        return len(expired)
+
     def demo(self, ip):
         now=int(time.time());user_id=secrets.token_hex(16)
         raw,csrf=secrets.token_urlsafe(32),secrets.token_urlsafe(32)
+        self.cleanup_expired_demos(now=now)
         with self.connection() as c:
             self.schema(c);c.execute('BEGIN IMMEDIATE')
             c.execute('DELETE FROM auth_attempts WHERE since<?',(now-900,))
             bucket=digest('demo:'+ip)
             attempt=c.execute('SELECT count FROM auth_attempts WHERE bucket=?',(bucket,)).fetchone()
-            if attempt and attempt[0]>=30:raise HTTPException(429,'体验创建较频繁，请稍后再试或联系作者')
-            if c.execute("SELECT COUNT(*) FROM auth_users WHERE role='demo' AND created>?",(now-3600,)).fetchone()[0]>=100:
+            if attempt and attempt[0]>=demo_ip_limit():raise HTTPException(429,'体验创建较频繁，请稍后再试或联系作者')
+            recent_users=c.execute("SELECT COUNT(*) FROM auth_users WHERE role='demo' AND created>?",(now-3600,)).fetchone()[0]
+            recent_events=c.execute("SELECT COUNT(*) FROM auth_events WHERE action='demo_start' AND at>?",(now-3600,)).fetchone()[0]
+            if max(recent_users, recent_events)>=100:
                 raise HTTPException(429,'当前体验人数较多，请稍后再试')
             c.execute('INSERT INTO auth_attempts VALUES(?,?,1) ON CONFLICT(bucket) DO UPDATE SET count=count+1',(bucket,now))
             # An unusable password: this account can only be reached through its own random session.
@@ -168,15 +236,33 @@ class Accounts:
             self.audit(c,user_id,'demo_start',user_id)
             return raw,{**public_user(c.execute('SELECT * FROM auth_users WHERE id=?',(user_id,)).fetchone()),'csrf':csrf}
 
+    def check_demo_call(self):
+        user=USER.get()
+        if not user or user['role']!='demo':return
+        today=date.today().isoformat()
+        with self.connection() as c:
+            self.schema(c)
+            row=c.execute('SELECT count FROM auth_demo_calls WHERE user_id=?',(user['id'],)).fetchone()
+            limit=demo_ai_calls()
+            if row and row[0]>=limit:raise HTTPException(429,f'本体验空间的{limit}次AI操作已用完；核对、核价、批准和导出仍可继续')
+            daily=c.execute('SELECT count FROM auth_demo_daily WHERE day=?',(today,)).fetchone()
+            daily_limit=demo_daily_calls()
+            if daily and daily[0]>=daily_limit:raise HTTPException(429,f'今日体验AI总额度（{daily_limit}次）已用完；核对、核价、批准和导出仍可继续')
+
     def reserve_demo_call(self):
         user=USER.get()
         if not user or user['role']!='demo':return
+        today=date.today().isoformat()
         with self.connection() as c:
             self.schema(c);c.execute('BEGIN IMMEDIATE')
             row=c.execute('SELECT count FROM auth_demo_calls WHERE user_id=?',(user['id'],)).fetchone()
             limit=demo_ai_calls()
             if row and row[0]>=limit:raise HTTPException(429,f'本体验空间的{limit}次AI操作已用完；核对、核价、批准和导出仍可继续')
+            daily=c.execute('SELECT count FROM auth_demo_daily WHERE day=?',(today,)).fetchone()
+            daily_limit=demo_daily_calls()
+            if daily and daily[0]>=daily_limit:raise HTTPException(429,f'今日体验AI总额度（{daily_limit}次）已用完；核对、核价、批准和导出仍可继续')
             c.execute('INSERT INTO auth_demo_calls VALUES(?,1) ON CONFLICT(user_id) DO UPDATE SET count=count+1',(user['id'],))
+            c.execute('INSERT INTO auth_demo_daily VALUES(?,1) ON CONFLICT(day) DO UPDATE SET count=count+1',(today,))
 
     def change_password(self, user, old, new):
         with self.connection() as c:

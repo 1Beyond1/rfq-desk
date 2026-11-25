@@ -1,18 +1,21 @@
 from pathlib import Path
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
+from urllib.parse import urlsplit
+import asyncio
+import csv
+import hashlib
+import hmac
+import io
 import json
 import os
-import sqlite3
-import csv
-import io
 import re
 import secrets
+import sqlite3
 import uuid
+import zlib
 from contextvars import ContextVar
 
-from datetime import datetime
-import hashlib
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -21,32 +24,95 @@ from .parsing import parse_file
 from . import price_intake, clarifications, agent, matrixone, material_policy, accounts, references, inbox
 from .model_router import ROUTER
 from .quote_html import render_quote
-from .materials import read_materials
+from .materials import read_materials, material_files
 from .semantic import get_adapter, propose, accept_candidate, synthetic_remote_allowed
-from .domain import new_case, analyze, replace_prices, approve, export_data, event, FIELDS
+from .domain import new_case, analyze, replace_prices, approve, export_data, event, FIELDS, ConflictError, is_case_approved, pending_candidate_batches
 
 ROOT = Path(__file__).resolve().parents[2]
 DB = Path(os.getenv('RFQ_DB') or str(ROOT/'var/rfq.sqlite3'))
-app = FastAPI(title='航材询报价工作台', version='0.1.0')
+MAX_CASE_MATERIALS = 25
+MAX_BULK_ROWS = 500
+LOCAL_ALLOWED_ORIGINS = {'http://127.0.0.1:5311', 'http://localhost:5311'}
+_DOCS_PATHS = {'/docs', '/docs/oauth2-redirect', '/redoc', '/openapi.json'}
+_VISITOR_SECRET = secrets.token_bytes(32)
+_docs_enabled = not (os.getenv('RFQ_AUTH_REQUIRED') == '1' and os.getenv('RFQ_ENABLE_DOCS') != '1')
+app = FastAPI(
+    title='航材询报价工作台',
+    version='0.1.0',
+    docs_url='/docs' if _docs_enabled else None,
+    redoc_url='/redoc' if _docs_enabled else None,
+    openapi_url='/openapi.json' if _docs_enabled else None,
+)
 
 @contextmanager
 def connection():
     DB.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB) as c:
+    c = sqlite3.connect(DB, timeout=10)
+    try:
+        c.execute('PRAGMA busy_timeout=10000')
+        c.execute('PRAGMA journal_mode=WAL')
         c.execute('CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS agent_turns (seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL, body TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS case_owners (case_id TEXT PRIMARY KEY, visitor TEXT NOT NULL)')
-        yield c
+        with c:
+            yield c
+    finally:
+        c.close()
 
 # On the public demo each browser sees only the work orders it created, so nothing one visitor pastes reaches
 # another. Off by default: local review and tests keep one shared desk.
 SCOPED = os.getenv('RFQ_VISITOR_SCOPE') == '1'
 VISITOR: ContextVar[str] = ContextVar('visitor', default='')
 CASE_PATH = re.compile(r'^/api/cases/([^/]+)')
-ACCOUNTS = accounts.Accounts(connection)
+ACCOUNTS = accounts.Accounts(connection, upload_root=lambda: ROOT/'var/uploads')
 app.include_router(accounts.router(ACCOUNTS))
 
+def _sign_visitor(token: str) -> str:
+    secret = (os.getenv('RFQ_VISITOR_SECRET') or '').encode('utf-8') or _VISITOR_SECRET
+    return hmac.new(secret, token.encode('ascii'), hashlib.sha256).hexdigest()
+
+def _make_visitor_cookie() -> tuple[str, str]:
+    token = secrets.token_urlsafe(32)
+    return token, f'{token}.{_sign_visitor(token)}'
+
+def _parse_visitor_cookie(raw: str) -> str | None:
+    if not isinstance(raw, str) or '.' not in raw:
+        return None
+    token, sig = raw.rsplit('.', 1)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{32,64}', token) or not re.fullmatch(r'[0-9a-f]{64}', sig):
+        return None
+    if not secrets.compare_digest(sig, _sign_visitor(token)):
+        return None
+    return token
+
+def _referer_origin(request: Request) -> str:
+    ref = (request.headers.get('referer') or '').strip()
+    if not ref:
+        return ''
+    parsed = urlsplit(ref)
+    if not parsed.scheme or not parsed.netloc:
+        return 'invalid'
+    return f'{parsed.scheme}://{parsed.netloc}'.rstrip('/')
+
+def check_origin_unauth(request: Request, check_referer: bool = False):
+    origin = (request.headers.get('origin') or '').strip()
+    fetch_site = (request.headers.get('sec-fetch-site') or '').strip().lower()
+    ref_origin = _referer_origin(request) if check_referer else ''
+    if not origin and not fetch_site and not ref_origin:
+        return
+    expected = os.getenv('RFQ_PUBLIC_ORIGIN', '').rstrip('/') or str(request.base_url).rstrip('/')
+    allowed = {expected} | LOCAL_ALLOWED_ORIGINS
+    if fetch_site == 'cross-site' or (fetch_site and fetch_site not in ('same-origin', 'same-site', 'none')):
+        raise HTTPException(403, '请求来源不受信任，请从本站打开')
+    if origin and origin.rstrip('/') not in allowed:
+        raise HTTPException(403, '请求来源不受信任，请从本站打开')
+    if check_referer and ref_origin and ref_origin not in allowed:
+        raise HTTPException(403, '请求来源不受信任，请从本站打开')
+
 def owns(case_id, visitor):
+    if not SCOPED and not accounts.enabled():
+        with connection() as c:
+            return bool(c.execute('SELECT 1 FROM cases WHERE id=?', (case_id,)).fetchone())
     with connection() as c:
         row = c.execute('SELECT visitor FROM case_owners WHERE case_id=?', (case_id,)).fetchone()
     return bool(row) and secrets.compare_digest(row[0], visitor)
@@ -54,6 +120,8 @@ def owns(case_id, visitor):
 @app.middleware('http')
 async def visitor_scope(request: Request, call_next):
     if request.method == 'OPTIONS': return await call_next(request)
+    if accounts.enabled() and os.getenv('RFQ_ENABLE_DOCS') != '1' and request.url.path in _DOCS_PATHS:
+        return JSONResponse({'detail': 'Not Found'}, status_code=404)
     if accounts.enabled() and request.url.path.startswith('/api/'):
         user = ACCOUNTS.session(request.cookies.get(accounts.COOKIE, ''), touch=request.url.path!='/api/auth/session')
         user_token = accounts.USER.set(user)
@@ -85,16 +153,23 @@ async def visitor_scope(request: Request, call_next):
             accounts.USER.reset(user_token)
         response.headers['Cache-Control'] = 'no-store'
         return response
+    if request.url.path.startswith('/api/') and request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        try:
+            check_origin_unauth(request)
+        except HTTPException as e:
+            return JSONResponse({'detail': e.detail}, status_code=e.status_code)
     if not SCOPED: return await call_next(request)
-    visitor = request.cookies.get('rfq_visitor', '')
-    fresh = not re.fullmatch(r'[A-Za-z0-9_-]{32,64}', visitor)
-    if fresh: visitor = secrets.token_urlsafe(32)
+    visitor = _parse_visitor_cookie(request.cookies.get('rfq_visitor', ''))
+    fresh = visitor is None
+    signed_cookie = ''
+    if fresh:
+        visitor, signed_cookie = _make_visitor_cookie()
     token = VISITOR.set(visitor)
     try:
         found = CASE_PATH.match(request.url.path)
         response = JSONResponse({'detail':'找不到工作单'}, status_code=404) if found and not owns(found.group(1), visitor) else await call_next(request)
     finally: VISITOR.reset(token)
-    if fresh: response.set_cookie('rfq_visitor', visitor, max_age=30*86400, httponly=True, samesite='lax', secure=request.headers.get('x-forwarded-proto')=='https')
+    if fresh: response.set_cookie('rfq_visitor', signed_cookie, max_age=30*86400, httponly=True, samesite='lax', secure=request.url.scheme=='https')
     return response
 
 app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:5311','http://localhost:5311'], allow_credentials=True, allow_methods=['GET','POST','PATCH'], allow_headers=['Content-Type','X-CSRF-Token','X-RFQ-Account'], expose_headers=['X-RFQ-Session-Changed'])
@@ -108,7 +183,6 @@ def save(c, case):
             entry.setdefault('detail',{})['account'] = {'id':user['id'],'username':user['username']}
     c.execute('INSERT OR REPLACE INTO cases VALUES (?, ?)', (case['id'],json.dumps(case,ensure_ascii=False)))
     if (SCOPED or accounts.enabled()) and VISITOR.get(): c.execute('INSERT OR IGNORE INTO case_owners VALUES (?, ?)', (case['id'], VISITOR.get()))
-    matrixone.sync(case,analyze(case))
 
 def load(c, id):
     row = c.execute('SELECT body FROM cases WHERE id=?',(id,)).fetchone()
@@ -119,17 +193,21 @@ def view(case):
     from .model_config import ModelSettings
     settings=ModelSettings.from_env()
     rows=analyze(case)
-    return {**case, 'rows':rows, 'clarifications':clarifications.listing(case), 'progress':progress(case,rows), 'mode':'model-live-local' if settings.configured and settings.enabled else 'offline-local'}
+    p=progress(case,rows)
+    return {**case, 'rows':rows, 'clarifications':clarifications.listing(case), 'progress':p, 'case_approved':p['case_approved'], 'mode':'model-live-local' if settings.configured and settings.enabled else 'offline-local'}
 
 def progress(case,rows=None):
     rows=analyze(case) if rows is None else rows
     active=[r for r in rows if not r['excluded']];ids={r['id'] for r in active}
     questions=[q for q in clarifications.listing(case) if q['state'] not in ('resolved','superseded')]
+    pending_cands=sum(len(u) for _,u in pending_candidate_batches(case))
+    case_ok=is_case_approved(case,rows)
     return {'active':len(active),'approved':sum(r['approved'] for r in active),
+            'case_approved':case_ok,
             'open_issues':sum(len(r['issues']) for r in active),'issue_rows':sum(bool(r['issues']) for r in active),
             'open_clarifications':sum(q['row_id'] in ids for q in questions),'all_open_clarifications':len(questions),
             'pending_parse_review':bool(case['warnings'] and not case.get('review_note')),
-            'pending_candidates':sum(c['status']=='pending' for b in case.get('candidate_batches',[]) if b['expected_revision']==case['revision'] for c in b['candidates'])}
+            'pending_candidates':pending_cands}
 
 class Change(BaseModel):
     revision: int
@@ -148,7 +226,9 @@ def mutate(id, change, action):
             if changed is False:return view(case)
             case['revision'] = max(case['revision'],change.revision+1)
             save(c,case)
-            return view(case)
+        matrixone.sync(case,analyze(case))
+        return view(case)
+    except ConflictError as e: raise HTTPException(409,str(e))
     except ValueError as e: raise HTTPException(422,str(e))
 
 @app.get('/api/health')
@@ -166,10 +246,12 @@ def cases():
         return [{'id':x['id'],'title':x['title'],'revision':x['revision'],**progress(x)} for (b,) in rows for x in [json.loads(b)]]
 
 def import_bytes(name, data, on_import=None):
-    if Path(name).suffix.lower() not in ('.txt','.eml','.csv','.xlsx','.pdf'):raise HTTPException(422,'支持 EML、CSV、XLSX、TXT 和文本型 PDF')
+    suffix = Path(name).suffix.lower()
+    if suffix not in ('.txt','.eml','.csv','.xlsx','.pdf'):raise HTTPException(422,'支持 EML、CSV、XLSX、TXT 和文本型 PDF')
     if not data.strip():raise HTTPException(422,'文件是空的，没有导入')
     try:
-        parsed = {'rows':[],'warnings':['文本材料未执行规则表格提取；请审阅候选并核查完整性'],'fragments':[]} if Path(name).suffix.lower()=='.txt' else parse_file(name,data)
+        material_files(name, data)
+        parsed = {'rows':[],'warnings':['文本材料未执行规则表格提取；请审阅候选并核查完整性'],'fragments':[]} if suffix=='.txt' else parse_file(name,data)
     except Exception: raise HTTPException(422,'文件无法解析，请检查文件格式和编码')
     case = new_case(name,parsed)
     with connection() as c:
@@ -180,15 +262,17 @@ def import_bytes(name, data, on_import=None):
         if on_import:on_import(c,case)
         folder = ROOT/'var/uploads'/case['id']; folder.mkdir(parents=True,exist_ok=True)
         (folder/Path(name).name).write_bytes(data)
+        case['materials_snapshot'] = case_materials(case)['snapshot']
         event(case,'import',{'filename':name,'rows':len(case['rows'])})
         save(c,case)
+    matrixone.sync(case,analyze(case))
     return view(case)
 
 @app.post('/api/import')
 async def upload(file:UploadFile=File(...)):
     data = await file.read(20*1024*1024+1)
     if len(data)>20*1024*1024: raise HTTPException(413,'文件上限 20 MB')
-    return import_bytes(Path(file.filename or 'unknown').name,data)
+    return await asyncio.to_thread(import_bytes, Path(file.filename or 'unknown').name, data)
 
 @app.post('/api/cases/{id}/materials')
 async def append_material(id:str,revision:int=Form(...),file:UploadFile=File(...)):
@@ -197,19 +281,32 @@ async def append_material(id:str,revision:int=Form(...),file:UploadFile=File(...
     name=Path(file.filename or '').name
     if not name or Path(name).suffix.lower() not in ('.txt','.eml','.pdf'):raise HTTPException(422,'追加原件支持 TXT / EML / 文本PDF')
     if len(data)>20*1024*1024:raise HTTPException(413,'文件上限20MB')
-    return append_file(id,revision,name,data)
+    return await asyncio.to_thread(append_file, id, revision, name, data)
 
 def append_file(id,revision,name,data,on_append=None):
+    suffix = Path(name).suffix.lower()
+    if suffix not in ('.txt','.eml','.pdf','.csv','.xlsx'):raise HTTPException(422,'追加原件格式不受支持')
+    if not data or not data.strip():raise HTTPException(422,'文件是空的，没有导入')
+    try:
+        material_files(name, data)
+        if suffix != '.txt': parse_file(name, data)
+    except Exception: raise HTTPException(422,'文件无法解析，请检查文件格式和编码')
     with connection() as c:
         c.execute('BEGIN IMMEDIATE');case=load(c,id)
         if revision!=case['revision']:raise HTTPException(409,'工作单已更新，请重新选择原件')
-        if on_append:on_append(c,case)
-        folder=ROOT/'var/uploads'/id;folder.mkdir(parents=True,exist_ok=True);path=folder/name
+        folder=ROOT/'var/uploads'/id;folder.mkdir(parents=True,exist_ok=True)
+        existing=[p for p in folder.glob('*') if p.is_file()]
+        if len(existing)>=MAX_CASE_MATERIALS:raise HTTPException(422,f'单张工作单原件数量上限为{MAX_CASE_MATERIALS}份')
+        path=folder/Path(name).name
         if path.exists():raise HTTPException(409,'同名原件已存在，禁止覆盖')
+        if on_append:on_append(c,case)
         with path.open('xb') as f:f.write(data)
+        case['case_approval']=None
+        case['materials_snapshot']=case_materials(case)['snapshot']
         case['revision']+=1
-        event(case,'material_append',{'filename':name,'effective_version_selected':False})
+        event(case,'material_append',{'filename':Path(name).name,'effective_version_selected':False})
         save(c,case)
+    matrixone.sync(case,analyze(case))
     return view(case)
 
 @app.post('/api/demo')
@@ -306,6 +403,10 @@ def semantic_demo(name:str):
 def store_batch(id,change,content,result,consent):
     def store(current,values):
         if case_materials(current)['snapshot']!=content['snapshot']:raise ValueError('提取期间原件变化，未保存候选')
+        current['materials_snapshot']=content['snapshot']
+        result['materials_snapshot']=content['snapshot']
+        if result.get('candidates'):
+            current['case_approval']=None
         current.setdefault('candidate_batches',[]).append(result)
         event(current,'candidate_propose',{'batch':result['id'],'engine':result['engine'],'model_status':result['model_status'],'count':len(result['candidates']),'metrics':result['metrics'],'remote_consent':consent})
     updated=mutate(id,change,store)
@@ -322,7 +423,7 @@ async def propose_candidates(id:str,change:Change,adapter=Depends(get_adapter)):
         mode=change.values.get('mode','model')
         if mode=='model':
             material_policy.check_remote_materials(content,ROOT)
-            ACCOUNTS.reserve_demo_call()
+            ACCOUNTS.check_demo_call()
         result=await propose(case,content,mode,adapter,consent or synthetic_remote_allowed(content,ROOT))
     except ValueError as e:raise HTTPException(422,str(e))
     if 'id' not in result:return {'case':view(case),'extraction':result}
@@ -388,28 +489,42 @@ def get_case(id:str):
 def apply_row_edit(case,row_id,values,mark_resolution=True):
     row = next((r for r in case['rows'] if r['id']==row_id),None)
     if not row: raise HTTPException(404)
-    if not values.get('reason','').strip(): raise ValueError('填写裁定依据')
+    reason = values.get('reason')
+    if not isinstance(reason, str) or not reason.strip(): raise ValueError('填写裁定依据')
+    if len(reason) > 4000: raise ValueError('裁定依据过长（上限4000字）')
+    reason = reason.strip()
+    if 'actor' in values and values['actor'] is not None:
+        if not isinstance(values['actor'], str) or len(values['actor']) > 200:
+            raise ValueError('操作人格式无效或过长')
     before = dict(row)
     for k in FIELDS:
-        if k in values: row[k] = str(values[k]).strip()
+        if k in values:
+            if not isinstance(values[k], str): raise ValueError(f'字段 {k} 须为字符串')
+            if len(values[k]) > 2000: raise ValueError(f'字段 {k} 长度超出上限（2000字）')
+            row[k] = values[k].strip()
     if 'excluded' in values:
         if not isinstance(values['excluded'],bool): raise ValueError('排除状态必须为布尔值')
         row['excluded']=values['excluded']
+    if row['excluded'] != before['excluded']:
+        # Excluding or restoring a row invalidates both row-level and case-level approvals so a
+        # shrunken quote cannot be exported and exclude->restore cannot resurrect old approval.
+        row['approval'] = None
+        case['case_approval'] = None
     changed=[f for f in FIELDS if row[f]!=before[f]]
-    actor=values.get('actor') or row.get('review_actor') or '本地操作人'
+    actor=(values.get('actor') or '').strip() or row.get('review_actor') or '本地操作人'
     for field in changed:
         original=row['raw_fields'].get(field,'')
         citations=row.get('field_provenance',{}).get(field,{}).get('sources',row['sources'])
         if row[field]==original:row.setdefault('field_provenance',{})[field]={'kind':'source','sources':citations}
         else:
-            d={'id':uuid.uuid4().hex,'row_id':row['id'],'field':field,'from':original,'to':row[field],'actor':actor,'reason':values['reason'],'kind':'authorized_human'}
+            d={'id':uuid.uuid4().hex,'row_id':row['id'],'field':field,'from':original,'to':row[field],'actor':actor,'reason':reason,'kind':'authorized_human'}
             case.setdefault('human_decisions',[]).append(d)
             row.setdefault('field_provenance',{})[field]={'kind':'human','original_value':original,'sources':citations,'decision_id':d['id']}
     row['pending_confirmations']=[f for f in row.get('pending_confirmations',[]) if f not in changed]
-    if mark_resolution:row['resolution']=values['reason']
+    if mark_resolution:row['resolution']=reason
     row['revision']+=1
-    # Retain approval for stale display, but row token always incorporates the edit/reason.
-    event(case,'resolve',{'row':row_id,'before':before,'after':dict(row),'reason':values['reason']})
+    # Retain approval for stale display on field edits; excluded toggles already cleared it above.
+    event(case,'resolve',{'row':row_id,'before':before,'after':dict(row),'reason':reason})
 
 
 @app.patch('/api/cases/{id}/rows/{row_id}')
@@ -421,10 +536,11 @@ def edit_rows(id:str,change:Change):
     def edit(case,values):
         ids=values.get('row_ids')
         if not isinstance(ids,list) or not ids or len(ids)!=len(set(ids)) or not all(isinstance(x,str) for x in ids):raise ValueError('请选择不同的询价行')
-        changes={k:v for k,v in values.items() if k in ('due','excluded','reason')}
+        if len(ids)>MAX_BULK_ROWS:raise ValueError(f'单次批量修改上限为{MAX_BULK_ROWS}行')
+        changes={k:v for k,v in values.items() if k in ('due','excluded','reason','actor')}
         if not ('due' in changes or 'excluded' in changes):raise ValueError('请选择要批量修改的字段')
         if 'due' in changes:
-            try: valid=date.fromisoformat(changes['due']).isoformat()==changes['due']
+            try: valid=isinstance(changes['due'],str) and date.fromisoformat(changes['due']).isoformat()==changes['due']
             except (TypeError,ValueError): valid=False
             if not valid:raise ValueError('统一截止日期须为有效的 YYYY-MM-DD')
         for row_id in ids:apply_row_edit(case,row_id,changes,mark_resolution=False)
@@ -433,12 +549,16 @@ def edit_rows(id:str,change:Change):
 @app.post('/api/cases/{id}/prices')
 def prices(id:str,change:Change): return mutate(id,change,lambda c,v:replace_prices(c,v.get('prices',[])))
 
-@app.post('/api/cases/{id}/prices/import/preview')
-async def price_preview(id:str,revision:int=Form(...),file:UploadFile=File(...)):
+def _run_price_preview(id, revision, filename, data):
     with connection() as c:case=load(c,id)
     if revision!=case['revision']:raise HTTPException(409,'工作单版本变化，请刷新')
-    try:return price_intake.preview(ROOT,case,Path(file.filename or '').name,await file.read(5*1024*1024+1))
-    except (ValueError,UnicodeError,KeyError) as e:raise HTTPException(422,str(e))
+    try:return price_intake.preview(ROOT,case,filename,data)
+    except (ValueError,UnicodeError,KeyError,zlib.error) as e:raise HTTPException(422,str(e))
+
+@app.post('/api/cases/{id}/prices/import/preview')
+async def price_preview(id:str,revision:int=Form(...),file:UploadFile=File(...)):
+    data = await file.read(5*1024*1024+1)
+    return await asyncio.to_thread(_run_price_preview, id, revision, Path(file.filename or '').name, data)
 
 @app.post('/api/cases/{id}/prices/import/accept')
 def price_accept(id:str,change:Change):
@@ -456,15 +576,17 @@ def demo_prices(id:str,change:Change):
 @app.post('/api/cases/{id}/review')
 def review(id:str,change:Change):
     def action(c,v):
-        if not v.get('note','').strip(): raise ValueError('填写解析警告的人工核查说明')
-        c['review_note']=v['note']; event(c,'parse_review',v)
+        note = v.get('note')
+        if not isinstance(note, str) or not note.strip(): raise ValueError('填写解析警告的人工核查说明')
+        if len(note) > 4000: raise ValueError('核查说明过长（上限4000字）')
+        c['review_note']=note.strip(); event(c,'parse_review',{**v,'note':c['review_note']})
     return mutate(id,change,action)
 
 @app.post('/api/cases/{id}/approve')
 def approval(id:str,change:Change):
     def action(c,v):
         source_guard(c)
-        approve(c,v.get('actor',''))
+        approve(c,v.get('actor',''),materials_snapshot=case_materials(c)['snapshot'])
     approved=mutate(id,change,action)
     matrixone.snapshot_approval(approved,change.values.get('actor',''))
     return approved
@@ -489,24 +611,32 @@ def resolve_clarification(id:str,item_id:str,change:Change):
         clarifications.resolve(c,item_id,v)
     return mutate(id,change,action)
 
+def _csv_cell(v):
+    s = '' if v is None else str(v)
+    if s.startswith(('\t', '\r', '\n')) or s.lstrip(' \t\r\n').startswith(('=', '+', '-', '@')):
+        return "'" + s
+    return s
+
 def checked_export(case,format,revision,explicit=False):
     if revision is not None and revision!=case['revision']:raise ValueError('所选批准版本已变化，请刷新后重新预览')
     if (explicit or format=='html') and revision is None:raise ValueError('HTML响应必须绑定明确工作版本' if format=='html' else '响应必须绑定明确工作版本')
     source_guard(case)
-    return export_data(case)
+    return export_data(case,materials_snapshot=case_materials(case)['snapshot'])
 
 
 def export_response(id,result,format,operation):
     headers={'X-RFQ-Business-Revision':str(result['revision']),'X-RFQ-Operation':operation}
     if format=='html':
         headers['Content-Disposition']=f'inline; filename=quote-{id}-r{result["revision"]}.html'
+        headers['Content-Security-Policy']="default-src 'none'; style-src 'unsafe-inline'"
+        headers['X-Content-Type-Options']='nosniff'
         return Response(render_quote(result),media_type='text/html',headers=headers)
     if format=='csv':
         out=io.StringIO();writer=csv.writer(out)
         writer.writerow(['类型','询价号','件号','数量','单位','件状','币种','单价','总价','交期','价格依据','来源定位','批准人'])
         for r in result['rows']:
             values=[result['label'],r['rfq'],r['part'],r['quantity'],r['unit'],r['condition'],r['price']['currency'],r['price']['amount'],r['total'],r['price']['lead_time'],r['price']['source'],' | '.join(s['file']+' '+s['location'] for s in r['sources']),r['approval']['actor']]
-            writer.writerow(["'"+str(v) if str(v).startswith(('=','+','-','@','\t','\r')) else v for v in values])
+            writer.writerow([_csv_cell(v) for v in values])
         headers['Content-Disposition']=f'attachment; filename="quote-{id}.csv"'
         return Response('\ufeff'+out.getvalue(),media_type='text/csv',headers=headers)
     return result
@@ -536,13 +666,24 @@ def audited_export(id,format,revision,route):
             result=checked_export(case,format,revision,explicit=route=='explicit_post')
             # Audit-only: do not advance the business version or invalidate its own approval.
             event(case,'export',{'revision':case['revision'],'format':format,'route':route});save(c,case)
+        matrixone.sync(case,analyze(case))
         return export_response(id,result,format,'formal_export')
     except ValueError as e:raise HTTPException(409,str(e))
 
 
 @app.get('/api/cases/{id}/export')
-def export(id:str,format:str='json',revision:int|None=None):
-    # Compatibility: the current frontend still uses this auditable legacy GET for preview.
+def export(id:str,request:Request,format:str='json',revision:int|None=None):
+    # Legacy auditable GET kept for compatibility with existing audit tests (test_backend_alignment.py);
+    # guarded against cross-site state writes via Origin / Sec-Fetch-Site / Referer checks.
+    # New callers should use read-only GET /quote-preview or explicit POST /exports.
+    if accounts.enabled():
+        accounts.check_origin(request)
+        ref_origin = _referer_origin(request)
+        expected = os.getenv('RFQ_PUBLIC_ORIGIN', '').rstrip('/') or str(request.base_url).rstrip('/')
+        if ref_origin and ref_origin != expected:
+            raise HTTPException(403, '请求来源不受信任，请从本站打开')
+    else:
+        check_origin_unauth(request, check_referer=True)
     return audited_export(id,format,revision,'legacy_get')
 
 
@@ -563,6 +704,7 @@ def get_agent_session():
     return agent.ModelSession(ModelSettings.routes()) if s.configured and s.enabled else None
 
 class CaseWorkspace:
+    tools = agent.CASE_TOOLS
     def __init__(self,id,adapter):self.id=id;self.adapter=adapter
     def case(self):
         with connection() as c:return load(c,self.id)
@@ -589,10 +731,10 @@ class CaseWorkspace:
         case=self.case();content=case_materials(case)
         result=await propose(case,content,'model',self.adapter,True)
         if 'id' not in result:return {'status':'没有提取到候选','detail':result['status']}
-        # A line the table parser already made formal would only ask the person to accept it twice.
-        keys=('rfq','part','quantity','unit','condition')
-        formal={tuple(r[k] for k in keys) for r in case['rows'] if not r['excluded']}
-        result['candidates']=[c for c in result['candidates'] if tuple(c['fields'].get(k,'') for k in keys) not in formal]
+        # A line the table parser already made formal would only ask the person to accept it twice,
+        # but revisions changing due/requirements/priority/description must not be discarded.
+        formal={tuple(r.get(k,'') for k in FIELDS) for r in case['rows'] if not r['excluded']}
+        result['candidates']=[c for c in result['candidates'] if tuple(c['fields'].get(k,'') for k in FIELDS) not in formal]
         if not result['candidates']:return {'status':'原件里的询价行已经是正式询价行，没有新的候选'}
         try:store_batch(self.id,Change(revision=case['revision'],values={}),content,result,True)
         except HTTPException as e:raise ValueError(e.detail)
@@ -604,6 +746,7 @@ AGENT_PROGRESS={}
 class GlobalWorkspace:
     """工作区首页的会话：不绑定某一张工作单，只汇总待办与只读参考。"""
     system = agent.HOME_SYSTEM
+    tools = agent.HOME_TOOLS
 
     def __init__(self,owner,adapter=None):
         self.owner=owner;self.adapter=adapter
@@ -635,7 +778,7 @@ class GlobalWorkspace:
         if candidates:todo.append({'kind':'candidates','count':candidates,'text':f'{candidates} 条候选待审'})
         unpriced=sum(c['issue_rows'] for c in cases)
         if unpriced:todo.append({'kind':'issue_rows','count':unpriced,'text':f'{unpriced} 行待核对或核价'})
-        waiting=sum(1 for c in cases if c['active'] and c['approved']<c['active'])
+        waiting=sum(1 for c in cases if c['active'] and not c.get('case_approved'))
         if waiting:todo.append({'kind':'approve','count':waiting,'text':f'{waiting} 张工作单待批准'})
         clarifications_open=sum(c['all_open_clarifications'] for c in cases)
         if clarifications_open:todo.append({'kind':'clarify','count':clarifications_open,'text':f'{clarifications_open} 项澄清未解决'})
@@ -711,7 +854,7 @@ async def agent_turn(id:str,body:AgentMessage,session=Depends(get_agent_session)
     original=any(body.message.strip()==f.read_text(encoding='utf-8',errors='replace').strip() for f in (ROOT/'var/uploads'/id).glob('*.txt'))
     demo=bool(accounts.USER.get() and accounts.USER.get()['role']=='demo')
     if demo and len(body.message)>600:raise HTTPException(422,'体验提问限600字；请围绕合成询价提问')
-    ACCOUNTS.reserve_demo_call()
+    ACCOUNTS.check_demo_call()
     AGENT_PROGRESS[id]=[]
     try:result=await agent.run_turn(CaseWorkspace(id,adapter),body.message,agent_turns(id),session,can_add_mail=not original and not demo,on_step=AGENT_PROGRESS[id].append)
     except ValueError as e:raise HTTPException(422,str(e))
@@ -754,7 +897,7 @@ async def agent_home_turn(body:HomeMessage,session=Depends(get_agent_session)):
     if not body.message.strip():raise HTTPException(422,'请输入内容')
     if len(body.message)>600:raise HTTPException(422,'首页提问限600字')
     if not body.consent and len(body.message)>AGENT_SHORT_QUESTION:raise HTTPException(422,'请先同意把问题发送给模型服务')
-    ACCOUNTS.reserve_demo_call()
+    ACCOUNTS.check_demo_call()
     try:result=await agent.run_turn(GlobalWorkspace(VISITOR.get()),body.message,home_turns(),session,can_add_mail=False)
     except ValueError as e:raise HTTPException(422,str(e))
     except agent.ModelUnavailable as e:raise HTTPException(503,f'{e}，请稍后重试')
@@ -795,11 +938,11 @@ def reference_query(body:ReferenceQuery):
         remote=body.semantic and os.getenv('RFQ_ENABLE_MODEL_REQUESTS')=='1' and bool(store.vectors())
         if remote:
             if not body.consent:raise ValueError('语义检索会发送本次检索词给模型，请先确认同意')
-            ACCOUNTS.reserve_demo_call()
+            ACCOUNTS.check_demo_call()
         return store.search('stock' if body.kind=='parts' else 'rule',body.query,body.semantic,body.rerank)
     except ValueError as e:raise HTTPException(422,str(e))
 
 
 app.include_router(inbox.router(connection,lambda:ROOT,lambda:VISITOR.get(),
     lambda:accounts.actor_label(accounts.USER.get()) if accounts.USER.get() else '本地访客',
-    import_bytes,append_file,owns,ACCOUNTS.reserve_demo_call))
+    import_bytes,append_file,owns,ACCOUNTS.check_demo_call))
