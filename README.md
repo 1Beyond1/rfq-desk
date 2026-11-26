@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="RFQ Desk Logo" width="84" />
+</p>
+
 # 询报价工作台 · RFQ Desk
 
 [![CI](https://github.com/1Beyond1/rfq-desk/actions/workflows/ci.yml/badge.svg)](https://github.com/1Beyond1/rfq-desk/actions/workflows/ci.yml)
